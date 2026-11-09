@@ -1,0 +1,12 @@
+[Unit]
+Description=TicketBridge: Graylog -> GLPI
+After=network.target
+
+[Service]
+WorkingDirectory=%h/ticketbridge
+EnvironmentFile=%h/ticketbridge/ticketbridge.env
+ExecStart=/usr/bin/python3 %h/ticketbridge/app.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
