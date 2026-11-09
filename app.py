@@ -14,12 +14,17 @@ ENV:
   TB_BLOCKBOARD   — база BlockBoard (https://blockboard.apps.monitoring.test)
   TB_CORR_WINDOW  — окно корреляции в секундах (1800): алерты одного хоста
                     за окно дополняют открытый тикет, а не плодят новые
+  TB_CLOSE_AFTER  — автозакрытие в секундах (86400): если по хосту нет новых
+                    алертов сутки, тикет закрывается комментарием (цикл MTTR)
+  TB_RECOVERY_RE  — regex события восстановления (agent_recovered|вернулся):
+                    такое событие сразу закрывает открытый тикет хоста
   TB_STATE_DB     — SQLite соответствий хост→тикет (state.db рядом с app.py)
 """
 import gzip
 import html
 import json
 import os
+import re
 import socket
 import sqlite3
 import ssl
@@ -40,6 +45,8 @@ HOMEWIKI = os.environ.get("TB_HOMEWIKI", "https://homewiki.apps.monitoring.test"
 BLOCKBOARD = os.environ.get("TB_BLOCKBOARD", "https://blockboard.apps.monitoring.test").rstrip("/")
 HOST = socket.gethostname()
 WINDOW = int(os.environ.get("TB_CORR_WINDOW", "1800"))
+CLOSE_AFTER = int(os.environ.get("TB_CLOSE_AFTER", "86400"))
+RECOVERY_RE = re.compile(os.environ.get("TB_RECOVERY_RE", r"agent_recovered|вернулся|recovered"), re.I)
 STATE_DB = os.environ.get("TB_STATE_DB",
                           os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.db"))
 CORR_LOCK = threading.Lock()
@@ -65,14 +72,16 @@ class Glpi:
         self.user_token = user_token
         self.session = None
 
-    def _req(self, path, body=None, headers=None):
+    def _req(self, path, body=None, headers=None, method=None):
         h = {"Content-Type": "application/json", "App-Token": self.app_token}
         if self.session:
             h["Session-Token"] = self.session
         h.update(headers or {})
         data = json.dumps(body).encode() if body is not None else None
+        if method is None:
+            method = "POST" if data else "GET"
         req = urllib.request.Request(self.base + "/apirest.php" + path, data=data,
-                                     headers=h, method="POST" if data else "GET")
+                                     headers=h, method=method)
         try:
             with urllib.request.urlopen(req, context=CTX, timeout=30) as r:
                 return json.loads(r.read() or b"{}")
@@ -107,6 +116,11 @@ class Glpi:
             return self._req(f"/Ticket/{tid}/ITILFollowup", body)
         except GlpiError:
             return self._req(f"/Ticket/{tid}/Followup", body)
+
+    def close_ticket(self, tid, comment):
+        """Комментарий + статус «закрыт» (6)."""
+        self.add_followup(tid, comment)
+        return self._req(f"/Ticket/{tid}", {"input": {"status": 6}}, method="PUT")
 
 
 def esc(s):
@@ -158,15 +172,90 @@ def state_db():
     return con
 
 
+def is_recovery(event):
+    """Событие восстановления («хост вернулся», agent_recovered и т.п.)."""
+    f = event.get("fields") or {}
+    hay = " ".join(str(x) for x in (
+        event.get("message"), event.get("key"), f.get("hr_event"), f.get("event"),
+        (event.get("event_definition_title") or "")))
+    return bool(RECOVERY_RE.search(hay))
+
+
+def close_incident(key, comment, now=None):
+    """Закрыть открытый тикет по ключу корреляции. Возвращает id или None."""
+    now = now or time.time()
+    with CORR_LOCK:
+        con = state_db()
+        row = con.execute(
+            "SELECT ticket_id, first_ts, cnt FROM incidents WHERE corr_key=?",
+            (key,)).fetchone()
+        if not row or key == "unknown":
+            con.close()
+            return None
+        tid, first_ts, cnt = row
+        try:
+            with Glpi() as g:
+                t = g.get_ticket(tid)
+                if int(t.get("status", 6)) in CLOSED_STATUSES:
+                    raise GlpiError("уже закрыт")
+                g.close_ticket(tid, comment + (
+                    f"<br><br>Инцидент по <b>{esc(key)}</b>: "
+                    f"{cnt} алерт(ов) за {(now - first_ts) / 3600:.1f} ч. "
+                    f"Закрыт автоматически TicketBridge."))
+        except GlpiError:
+            con.close()
+            return None
+        con.execute("DELETE FROM incidents WHERE corr_key=?", (key,))
+        con.commit()
+        con.close()
+    return tid
+
+
+def sweeper():
+    """Раз в 30 минут закрывает инциденты без новых алертов дольше CLOSE_AFTER."""
+    while True:
+        time.sleep(1800)
+        try:
+            now = time.time()
+            con = state_db()
+            stale = [r[0] for r in con.execute(
+                "SELECT corr_key FROM incidents WHERE last_ts < ?", (now - CLOSE_AFTER,))]
+            con.close()
+            for key in stale:
+                tid = close_incident(
+                    key, f"<b>Автозакрытие:</b> новых алертов по хосту нет "
+                         f"{CLOSE_AFTER // 3600} ч.", now)
+                if tid:
+                    send_gelf(f"TicketBridge: тикет #{tid} автозакрыт по TTL ({key})",
+                              tool="ticketbridge", tb_event="autoclose",
+                              ticket_id=tid, corr=key)
+        except Exception:
+            pass   # фоновый поток не должен умирать
+
+
 def handle_event(event):
     """Создать тикет GLPI из события Graylog или дополнить открытый инцидент.
 
     Алерты одного хоста в пределах окна TB_CORR_WINDOW дополняют уже
     открытый тикет комментарием (таймлайн), а не создают новый.
+    Событие восстановления (agent_recovered и т.п.) закрывает тикет.
     """
     key = corr_key(event)
     now = time.time()
     msg = (event.get("message") or "событие Graylog")
+    if is_recovery(event) and key != "unknown":
+        tid = close_incident(
+            key, f"<b>Восстановление:</b> {esc(msg)} "
+                 f"({esc(event.get('timestamp') or '')}).", now)
+        if tid:
+            send_gelf(f"TicketBridge: тикет #{tid} закрыт — хост {key} восстановлен",
+                      tool="ticketbridge", tb_event="closed_recovery",
+                      ticket_id=tid, corr=key)
+            return tid
+        # некому закрывать — восстановление без открытого инцидента игнорируем
+        send_gelf(f"TicketBridge: восстановление без открытого тикета ({key})",
+                  tool="ticketbridge", tb_event="recovery_skip", corr=key)
+        return None
     with CORR_LOCK:
         con = state_db()
         row = con.execute(
@@ -244,5 +333,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"TicketBridge: http://0.0.0.0:{PORT}/hook (GLPI: {GLPI})")
+    threading.Thread(target=sweeper, daemon=True).start()
+    print(f"TicketBridge: http://0.0.0.0:{PORT}/hook (GLPI: {GLPI}, "
+          f"автозакрытие после {CLOSE_AFTER // 3600} ч тишины)")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

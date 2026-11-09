@@ -34,6 +34,17 @@ systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
 
 Оба токена — в `ticketbridge.env` (`TB_GLPI_APP_TOKEN`, `TB_GLPI_USER_TOKEN`).
 
+## Автозакрытие (цикл MTTR)
+
+- **Восстановление**: событие вида `agent_recovered` / «вернулся» по тому же
+  хосту закрывает открытый тикет с комментарием (правило Graylog
+  «HOMEREPO - Агент вернулся на связь» шлёт только вебхук, без письма).
+- **TTL**: раз в 30 минут фоновый sweeper закрывает инциденты, по которым
+  нет новых алертов дольше `TB_CLOSE_AFTER` (по умолчанию 24 ч) — с
+  комментарием «Автозакрытие: тишина».
+- События `tb_event=closed_recovery` / `autoclose` уходят в Graylog, так что
+  Lab Score видит честное время жизни тикетов (MTTR).
+
 ## Graylog
 
 System → Alerts → Notifications → HTTP Notification:

@@ -144,3 +144,58 @@ def test_correlation_window_expired(tmp_path, monkeypatch):
                 (time.time() - 1860,)); con.commit(); con.close()
     t2 = tb.handle_event(_ev("rule1"))
     assert t2 != t1
+
+
+# --- автозакрытие -----------------------------------------------------------
+
+class _FakeGlpiClose(_FakeGlpi):
+    closed = []
+    def close_ticket(self, tid, comment):
+        self.followups.append((tid, comment))
+        self.closed.append(tid)
+        self.status = 6
+        return {}
+
+
+def test_recovery_closes_ticket(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpiClose)
+    _FakeGlpiClose.created, _FakeGlpiClose.followups = [], []
+    _FakeGlpiClose.closed, _FakeGlpiClose.status = [], 1
+    t1 = tb.handle_event(_ev("HOMEREPO - Агент молчит больше суток"))
+    tid = tb.handle_event(_ev("HOMEREPO - Агент вернулся на связь (agent_recovered)"))
+    assert tid == t1
+    assert _FakeGlpiClose.closed == [t1]
+    assert "Восстановление" in _FakeGlpiClose.followups[-1][1]
+    # инцидент удалён из состояния — следующий алерт создаст новый тикет
+    t2 = tb.handle_event(_ev("HOMEREPO - Агент молчит больше суток"))
+    assert t2 != t1 and len(_FakeGlpiClose.created) == 2
+
+
+def test_recovery_without_incident_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpiClose)
+    _FakeGlpiClose.created, _FakeGlpiClose.closed = [], []
+    tid = tb.handle_event(_ev("HOMEREPO - Агент вернулся на связь (agent_recovered)"))
+    assert tid is None and _FakeGlpiClose.created == [] and _FakeGlpiClose.closed == []
+
+
+def test_ttl_autoclose(tmp_path, monkeypatch):
+    import sqlite3, time
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpiClose)
+    _FakeGlpiClose.created, _FakeGlpiClose.followups = [], []
+    _FakeGlpiClose.closed, _FakeGlpiClose.status = [], 1
+    t1 = tb.handle_event(_ev("LNX - Брутфорс SSH"))
+    # прошло 25 часов тишины
+    con = sqlite3.connect(tmp_path / "state.db")
+    con.execute("UPDATE incidents SET last_ts=? WHERE corr_key='redos-server'",
+                (time.time() - 90000,)); con.commit(); con.close()
+    tid = tb.close_incident("redos-server", "<b>Автозакрытие:</b> тишина 24 ч.")
+    assert tid == t1 and _FakeGlpiClose.closed == [t1]
+
+
+def test_is_recovery_detection():
+    assert tb.is_recovery({"message": "HOMEREPO - Агент вернулся на связь", "fields": {}})
+    assert tb.is_recovery({"message": "x", "fields": {"hr_event": "agent_recovered"}})
+    assert not tb.is_recovery({"message": "HOMEREPO - Агент молчит", "fields": {}})
