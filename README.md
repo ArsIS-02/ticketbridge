@@ -8,6 +8,10 @@
 Graylog (HTTP notification) --POST /hook?key=...--> TicketBridge --REST--> GLPI Ticket
 ```
 
+## Скриншоты
+
+![Заявки GLPI, созданные из алертов Graylog](docs/screenshots/glpi-tickets.png)
+
 ## Корреляция инцидентов
 
 Повторный алерт того же хоста (ключ: `fields.host` / `source` /
