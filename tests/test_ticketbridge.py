@@ -80,3 +80,67 @@ def test_handle_event_against_mock_glpi():
     srv.shutdown()
     assert tid == 777
     assert MockGlpi.last_ticket["urgency"] == 5
+
+
+class _FakeGlpi:
+    """Заглушка GLPI: считает созданные тикеты и followup'ы."""
+    created = []
+    followups = []
+    status = 1
+
+    def __init__(self, *a, **kw): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def create_ticket(self, name, content, urgency=3):
+        self.created.append(name); return 100 + len(self.created)
+    def get_ticket(self, tid): return {"id": tid, "status": self.status}
+    def add_followup(self, tid, content): self.followups.append((tid, content)); return {}
+
+
+def _ev(msg, host="redos-server"):
+    return {"message": msg, "timestamp": "2026-11-09T16:00:00Z", "priority": 3,
+            "event_definition_id": "d", "fields": {"host": host}}
+
+
+def test_correlation_groups_same_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpi)
+    _FakeGlpi.created, _FakeGlpi.followups, _FakeGlpi.status = [], [], 1
+    t1 = tb.handle_event(_ev("LNX - Брутфорс SSH"))
+    t2 = tb.handle_event(_ev("LNX - Успешный вход root по SSH"))
+    t3 = tb.handle_event(_ev("LNX - Обратная оболочка"))
+    assert t1 == t2 == t3
+    assert len(_FakeGlpi.created) == 1 and len(_FakeGlpi.followups) == 2
+    assert "алерт №3" in _FakeGlpi.followups[-1][1]
+
+
+def test_correlation_different_hosts_separate(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpi)
+    _FakeGlpi.created, _FakeGlpi.followups, _FakeGlpi.status = [], [], 1
+    a = tb.handle_event(_ev("rule1", host="host-a"))
+    b = tb.handle_event(_ev("rule2", host="host-b"))
+    assert a != b and len(_FakeGlpi.created) == 2
+
+
+def test_correlation_closed_ticket_new_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpi)
+    _FakeGlpi.created, _FakeGlpi.followups, _FakeGlpi.status = [], [], 1
+    t1 = tb.handle_event(_ev("rule1"))
+    _FakeGlpi.status = 6  # тикет закрыли
+    t2 = tb.handle_event(_ev("rule1"))
+    assert t2 != t1 and len(_FakeGlpi.created) == 2
+
+
+def test_correlation_window_expired(tmp_path, monkeypatch):
+    import sqlite3, time
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpi)
+    _FakeGlpi.created, _FakeGlpi.followups, _FakeGlpi.status = [], [], 1
+    t1 = tb.handle_event(_ev("rule1"))
+    con = sqlite3.connect(tmp_path / "state.db")  # «прошёл» 31 минуту
+    con.execute("UPDATE incidents SET last_ts=? WHERE corr_key='redos-server'",
+                (time.time() - 1860,)); con.commit(); con.close()
+    t2 = tb.handle_event(_ev("rule1"))
+    assert t2 != t1

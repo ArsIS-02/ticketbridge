@@ -12,13 +12,18 @@ ENV:
   TB_GELF_HOST/PORT — 127.0.0.1:12206
   TB_HOMEWIKI     — база HomeWiki (https://homewiki.apps.monitoring.test)
   TB_BLOCKBOARD   — база BlockBoard (https://blockboard.apps.monitoring.test)
+  TB_CORR_WINDOW  — окно корреляции в секундах (1800): алерты одного хоста
+                    за окно дополняют открытый тикет, а не плодят новые
+  TB_STATE_DB     — SQLite соответствий хост→тикет (state.db рядом с app.py)
 """
 import gzip
 import html
 import json
 import os
 import socket
+import sqlite3
 import ssl
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +39,11 @@ GELF_PORT = int(os.environ.get("TB_GELF_PORT", "12206"))
 HOMEWIKI = os.environ.get("TB_HOMEWIKI", "https://homewiki.apps.monitoring.test").rstrip("/")
 BLOCKBOARD = os.environ.get("TB_BLOCKBOARD", "https://blockboard.apps.monitoring.test").rstrip("/")
 HOST = socket.gethostname()
+WINDOW = int(os.environ.get("TB_CORR_WINDOW", "1800"))
+STATE_DB = os.environ.get("TB_STATE_DB",
+                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.db"))
+CORR_LOCK = threading.Lock()
+CLOSED_STATUSES = {5, 6}   # GLPI: 5=решён, 6=закрыт
 
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
@@ -87,6 +97,17 @@ class Glpi:
                                             "urgency": urgency}})
         return r.get("id") if isinstance(r, dict) else r
 
+    def get_ticket(self, tid):
+        return self._req(f"/Ticket/{tid}")
+
+    def add_followup(self, tid, content):
+        """Комментарий к тикету (GLPI 10: ITILFollowup, старые: Followup)."""
+        body = {"input": {"itemtype": "Ticket", "items_id": tid, "content": content}}
+        try:
+            return self._req(f"/Ticket/{tid}/ITILFollowup", body)
+        except GlpiError:
+            return self._req(f"/Ticket/{tid}/Followup", body)
+
 
 def esc(s):
     return html.escape(str(s))
@@ -120,14 +141,69 @@ def send_gelf(short, **fields):
     sock.close()
 
 
+def corr_key(event):
+    """Ключ корреляции: хост-источник алерта (нормализованный)."""
+    f = event.get("fields") or {}
+    for cand in (f.get("host"), f.get("source"), event.get("key"), event.get("source")):
+        if cand:
+            return str(cand).strip().lower()
+    return "unknown"
+
+
+def state_db():
+    con = sqlite3.connect(STATE_DB)
+    con.execute("""CREATE TABLE IF NOT EXISTS incidents(
+        corr_key TEXT PRIMARY KEY, ticket_id INTEGER,
+        first_ts REAL, last_ts REAL, cnt INTEGER, last_msg TEXT)""")
+    return con
+
+
 def handle_event(event):
-    """Создать тикет GLPI из события Graylog. Возвращает id тикета."""
-    name, content, urgency = compose_ticket(event)
-    with Glpi() as g:
-        tid = g.create_ticket(name, content, urgency)
+    """Создать тикет GLPI из события Graylog или дополнить открытый инцидент.
+
+    Алерты одного хоста в пределах окна TB_CORR_WINDOW дополняют уже
+    открытый тикет комментарием (таймлайн), а не создают новый.
+    """
+    key = corr_key(event)
+    now = time.time()
+    msg = (event.get("message") or "событие Graylog")
+    with CORR_LOCK:
+        con = state_db()
+        row = con.execute(
+            "SELECT ticket_id, first_ts, last_ts, cnt FROM incidents WHERE corr_key=?",
+            (key,)).fetchone()
+        if row and key != "unknown" and now - row[2] <= WINDOW:
+            tid, cnt = row[0], row[3]
+            try:
+                with Glpi() as g:
+                    t = g.get_ticket(tid)
+                    if int(t.get("status", 6)) in CLOSED_STATUSES:
+                        raise GlpiError(f"тикет {tid} закрыт")
+                    fup = (f"<b>+ {esc(msg)}</b><br>Время: {esc(event.get('timestamp'))}<br>"
+                           f"Продолжение инцидента по хосту <b>{esc(key)}</b> — "
+                           f"алерт №{cnt + 1} за последние {WINDOW // 60} мин.")
+                    g.add_followup(tid, fup)
+                con.execute("UPDATE incidents SET last_ts=?, cnt=cnt+1, last_msg=? WHERE corr_key=?",
+                            (now, msg[:200], key))
+                con.commit()
+                con.close()
+                send_gelf(f"TicketBridge: тикет #{tid} дополнен ({key}: {msg[:80]})",
+                          tool="ticketbridge", tb_event="followup",
+                          ticket_id=tid, corr=key)
+                return tid
+            except GlpiError:
+                pass   # тикет закрыт или GLPI недоступен — заводим новый
+        name, content, urgency = compose_ticket(event)
+        with Glpi() as g:
+            tid = g.create_ticket(name, content, urgency)
+        con.execute("""INSERT OR REPLACE INTO incidents
+                       (corr_key, ticket_id, first_ts, last_ts, cnt, last_msg)
+                       VALUES(?,?,?,?,1,?)""", (key, tid, now, now, msg[:200]))
+        con.commit()
+        con.close()
     send_gelf(f"TicketBridge: тикет GLPI #{tid} — {name[:120]}",
               tool="ticketbridge", tb_event="ticket", ticket_id=tid,
-              alert=event.get("message", "")[:200])
+              corr=key, alert=msg[:200])
     return tid
 
 
