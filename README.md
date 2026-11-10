@@ -1,11 +1,14 @@
 # TicketBridge
 
-Мост «Graylog → GLPI»: HTTP-уведомление Graylog о High-алерте превращается
+Мост «Graylog → GLPI + DFIR-IRIS»: HTTP-уведомление Graylog о High-алерте превращается
 в тикет GLPI со ссылками на разбор в HomeWiki, отчёт TrafficLens и кнопкой
 блокировки IOC в BlockBoard. Действия логируются обратно в Graylog (GELF).
+Дополнительно каждый алерт дублируется в DFIR-IRIS (`POST /alerts/add`) для
+триажа и расследования инцидентов ИБ (если заданы `TB_IRIS_URL` и `TB_IRIS_KEY`).
 
 ```
 Graylog (HTTP notification) --POST /hook?key=...--> TicketBridge --REST--> GLPI Ticket
+                                                             \--REST--> DFIR-IRIS Alert
 ```
 
 ## Скриншоты

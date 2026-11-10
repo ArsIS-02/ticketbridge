@@ -58,6 +58,10 @@ CTX.verify_mode = ssl.CERT_NONE
 
 URGENCY = {3: 5, 2: 3, 1: 1}   # Graylog priority -> GLPI urgency
 
+IRIS = os.environ.get("TB_IRIS_URL", "").rstrip("/")   # https://iris.apps.monitoring.test
+IRIS_KEY = os.environ.get("TB_IRIS_KEY", "")
+IRIS_SEVERITY = {3: 5, 2: 1, 1: 4}   # Graylog priority -> IRIS severity (High/Medium/Low)
+
 
 class GlpiError(Exception):
     pass
@@ -144,6 +148,44 @@ def compose_ticket(event):
                f"<table>{rows}</table><br>" + " · ".join(links))
     prio = int(event.get("priority") or 2)
     return f"[Graylog] {msg}"[:250], content, URGENCY.get(prio, 3)
+
+
+def send_iris(event):
+    """Дублирует алерт Graylog в DFIR-IRIS (/alerts/add).
+
+    Не влияет на основной поток: при ошибке только предупреждение в GELF.
+    Возвращает (ok, info).
+    """
+    if not IRIS or not IRIS_KEY:
+        return False, "disabled"
+    f = event.get("fields") or {}
+    prio = int(event.get("priority") or 2)
+    payload = {
+        "alert_title": (event.get("message") or "событие Graylog")[:250],
+        "alert_description": compose_ticket(event)[1],
+        "alert_source": "Graylog",
+        "alert_source_ref": str(event.get("event_definition_id") or event.get("key") or ""),
+        "alert_source_link": "https://graylog.apps.monitoring.test/alerts",
+        "alert_severity_id": IRIS_SEVERITY.get(prio, 1),
+        "alert_status_id": 2,   # New
+        "alert_source_event_time": event.get("timestamp") or "",
+        "alert_tags": "graylog,ticketbridge",
+        "alert_customer_id": 1,
+        "alert_source_content": event,
+    }
+    try:
+        req = urllib.request.Request(
+            IRIS + "/alerts/add", method="POST",
+            data=json.dumps(payload, ensure_ascii=False).encode(),
+            headers={"Authorization": "Bearer " + IRIS_KEY,
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
+            body = json.loads(r.read().decode())
+        if body.get("status") == "success":
+            return True, str((body.get("data") or {}).get("alert_id") or "")
+        return False, str(body)[:200]
+    except Exception as e:
+        return False, str(e)[:200]
 
 
 def send_gelf(short, **fields):
@@ -233,7 +275,7 @@ def sweeper():
             pass   # фоновый поток не должен умирать
 
 
-def handle_event(event):
+def _handle_event(event):
     """Создать тикет GLPI из события Graylog или дополнить открытый инцидент.
 
     Алерты одного хоста в пределах окна TB_CORR_WINDOW дополняют уже
@@ -293,6 +335,17 @@ def handle_event(event):
     send_gelf(f"TicketBridge: тикет GLPI #{tid} — {name[:120]}",
               tool="ticketbridge", tb_event="ticket", ticket_id=tid,
               corr=key, alert=msg[:200])
+    return tid
+
+
+def handle_event(event):
+    """Основная обработка (GLPI) + дублирование алерта в DFIR-IRIS."""
+    tid = _handle_event(event)
+    if not is_recovery(event):
+        ok, info = send_iris(event)
+        send_gelf(f"TicketBridge: IRIS {'алерт #' + info if ok else 'ОШИБКА: ' + info}",
+                  tool="ticketbridge", tb_event="iris_alert" if ok else "iris_error",
+                  corr=corr_key(event), ticket_id=tid or 0)
     return tid
 
 
