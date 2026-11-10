@@ -3,8 +3,9 @@
 Мост «Graylog → GLPI + DFIR-IRIS»: HTTP-уведомление Graylog о High-алерте превращается
 в тикет GLPI со ссылками на разбор в HomeWiki, отчёт TrafficLens и кнопкой
 блокировки IOC в BlockBoard. Действия логируются обратно в Graylog (GELF).
-Дополнительно каждый алерт дублируется в DFIR-IRIS (`POST /alerts/add`) для
-триажа и расследования инцидентов ИБ (если заданы `TB_IRIS_URL` и `TB_IRIS_KEY`).
+Дополнительно каждый алерт дублируется в DFIR-IRIS для триажа и расследования
+инцидентов ИБ (если заданы `TB_IRIS_URL` и `TB_IRIS_KEY`). Поддерживаются IRIS v2
+(`POST /alerts/add`) и v3 (`POST /api/v2/alerts`), включая разные форматы ответа.
 
 ```
 Graylog (HTTP notification) --POST /hook?key=...--> TicketBridge --REST--> GLPI Ticket
@@ -31,6 +32,15 @@ cp ticketbridge.env ~/ticketbridge/   # заполнить токены GLPI
 cp systemd/ticketbridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
 ```
+
+## Настройка DFIR-IRIS
+
+- IRIS v2.4.x: `TB_IRIS_API_PATH=/alerts/add` (значение по умолчанию).
+- IRIS v3: `TB_IRIS_API_PATH=/api/v2/alerts`.
+
+Путь должен начинаться с `/` и относиться к хосту из `TB_IRIS_URL`. API-ключ
+передаётся как `Authorization: Bearer <TB_IRIS_KEY>`. Для v3 проверено создание
+алерта с HTTP 201 и чтение прямого JSON-объекта без обёртки `status: success`.
 
 ## Подготовка GLPI
 

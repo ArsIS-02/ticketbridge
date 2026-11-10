@@ -61,6 +61,9 @@ URGENCY = {3: 5, 2: 3, 1: 1}   # Graylog priority -> GLPI urgency
 IRIS = os.environ.get("TB_IRIS_URL", "").rstrip("/")   # https://iris.apps.monitoring.test
 IRIS_KEY = os.environ.get("TB_IRIS_KEY", "")
 IRIS_SEVERITY = {3: 5, 2: 1, 1: 4}   # Graylog priority -> IRIS severity (High/Medium/Low)
+IRIS_API_PATH = os.environ.get("TB_IRIS_API_PATH", "/alerts/add")
+if not IRIS_API_PATH.startswith("/") or IRIS_API_PATH.startswith("//"):
+    raise ValueError("TB_IRIS_API_PATH must be an absolute path on the IRIS host")
 
 
 class GlpiError(Exception):
@@ -151,8 +154,9 @@ def compose_ticket(event):
 
 
 def send_iris(event):
-    """Дублирует алерт Graylog в DFIR-IRIS (/alerts/add).
+    """Дублирует алерт Graylog в DFIR-IRIS через настроенный API endpoint.
 
+    IRIS v2 использует /alerts/add, IRIS v3 — /api/v2/alerts.
     Не влияет на основной поток: при ошибке только предупреждение в GELF.
     Возвращает (ok, info).
     """
@@ -175,14 +179,20 @@ def send_iris(event):
     }
     try:
         req = urllib.request.Request(
-            IRIS + "/alerts/add", method="POST",
+            IRIS + IRIS_API_PATH, method="POST",
             data=json.dumps(payload, ensure_ascii=False).encode(),
             headers={"Authorization": "Bearer " + IRIS_KEY,
                      "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
             body = json.loads(r.read().decode())
+        data = body.get("data")
+        if isinstance(data, dict) and data.get("alert_id") is not None:
+            return True, str(data["alert_id"])
+        # IRIS v3 возвращает созданный объект напрямую, без конверта v2.
+        if body.get("alert_id") is not None:
+            return True, str(body["alert_id"])
         if body.get("status") == "success":
-            return True, str((body.get("data") or {}).get("alert_id") or "")
+            return True, ""
         return False, str(body)[:200]
     except Exception as e:
         return False, str(e)[:200]

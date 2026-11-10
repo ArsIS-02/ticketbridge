@@ -199,3 +199,50 @@ def test_is_recovery_detection():
     assert tb.is_recovery({"message": "HOMEREPO - Агент вернулся на связь", "fields": {}})
     assert tb.is_recovery({"message": "x", "fields": {"hr_event": "agent_recovered"}})
     assert not tb.is_recovery({"message": "HOMEREPO - Агент молчит", "fields": {}})
+
+
+# --- DFIR-IRIS v2/v3 ---------------------------------------------------------
+
+class _FakeIrisResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def read(self):
+        return json.dumps({"status": "success", "data": {"alert_id": 42}}).encode()
+
+
+def test_send_iris_supports_v2_and_v3_endpoints(monkeypatch):
+    requests = []
+    monkeypatch.setattr(tb, "IRIS", "https://iris.test")
+    monkeypatch.setattr(tb, "IRIS_KEY", "secret")
+    monkeypatch.setattr(tb.urllib.request, "urlopen",
+                        lambda request, **kwargs: requests.append(request) or _FakeIrisResponse())
+    for path in ("/alerts/add", "/api/v2/alerts"):
+        monkeypatch.setattr(tb, "IRIS_API_PATH", path)
+        ok, alert_id = tb.send_iris(_ev("IRIS integration test"))
+        assert ok and alert_id == "42"
+    assert [request.full_url for request in requests] == [
+        "https://iris.test/alerts/add", "https://iris.test/api/v2/alerts"]
+    for request in requests:
+        assert request.headers["Authorization"] == "Bearer secret"
+        payload = json.loads(request.data)
+        assert payload["alert_source"] == "Graylog"
+        assert payload["alert_status_id"] == 2
+
+
+class _FakeIrisV3Response(_FakeIrisResponse):
+    def read(self):
+        return json.dumps({"alert_id": 43, "alert_title": "created"}).encode()
+
+
+def test_send_iris_accepts_direct_v3_response(monkeypatch):
+    monkeypatch.setattr(tb, "IRIS", "https://iris.test")
+    monkeypatch.setattr(tb, "IRIS_KEY", "secret")
+    monkeypatch.setattr(tb, "IRIS_API_PATH", "/api/v2/alerts")
+    monkeypatch.setattr(tb.urllib.request, "urlopen",
+                        lambda request, **kwargs: _FakeIrisV3Response())
+    ok, alert_id = tb.send_iris(_ev("IRIS v3 response test"))
+    assert ok and alert_id == "43"
