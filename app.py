@@ -32,7 +32,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 PORT = int(os.environ.get("TB_PORT", "8099"))
 KEY = os.environ.get("TB_KEY", "dev-key")
@@ -43,6 +43,7 @@ GELF_HOST = os.environ.get("TB_GELF_HOST", "127.0.0.1")
 GELF_PORT = int(os.environ.get("TB_GELF_PORT", "12206"))
 HOMEWIKI = os.environ.get("TB_HOMEWIKI", "https://homewiki.apps.monitoring.test").rstrip("/")
 BLOCKBOARD = os.environ.get("TB_BLOCKBOARD", "https://blockboard.apps.monitoring.test").rstrip("/")
+GRAYLOG = os.environ.get("TB_GRAYLOG_URL", "https://graylog.apps.monitoring.test").rstrip("/")
 HOST = socket.gethostname()
 WINDOW = int(os.environ.get("TB_CORR_WINDOW", "1800"))
 CLOSE_AFTER = int(os.environ.get("TB_CLOSE_AFTER", "86400"))
@@ -153,6 +154,15 @@ def compose_ticket(event):
     return f"[Graylog] {msg}"[:250], content, URGENCY.get(prio, 3)
 
 
+def graylog_replay_url(event):
+    """Replay Search конкретного события; без id — общая очередь Graylog."""
+    base = GRAYLOG.rstrip("/")
+    event_id = event.get("id")
+    if not event_id:
+        return f"{base}/alerts"
+    return f"{base}/alerts/{quote(str(event_id), safe='')}/replay-search"
+
+
 def send_iris(event):
     """Дублирует алерт Graylog в DFIR-IRIS через настроенный API endpoint.
 
@@ -169,7 +179,7 @@ def send_iris(event):
         "alert_description": compose_ticket(event)[1],
         "alert_source": "Graylog",
         "alert_source_ref": str(event.get("event_definition_id") or event.get("key") or ""),
-        "alert_source_link": "https://graylog.apps.monitoring.test/alerts",
+        "alert_source_link": graylog_replay_url(event),
         "alert_severity_id": IRIS_SEVERITY.get(prio, 1),
         "alert_status_id": 2,   # New
         "alert_source_event_time": event.get("timestamp") or "",

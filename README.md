@@ -46,6 +46,18 @@ systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
 передаётся как `Authorization: Bearer <TB_IRIS_KEY>`. Для v3 проверено создание
 алерта с HTTP 201 и чтение прямого JSON-объекта без обёртки `status: success`.
 
+### Source Link → Graylog Replay Search
+
+Поле **Source Link** в новых алертах IRIS ведёт на повторный поиск конкретного
+события Graylog: `<TB_GRAYLOG_URL>/alerts/<event.id>/replay-search`. Маршрут
+соответствует Graylog 7.2.1 и использует `id` из HTTP-уведомления, поэтому
+дополнительные запросы к API не нужны. Если у нестандартного события нет `id`,
+используется резервная ссылка `<TB_GRAYLOG_URL>/alerts`.
+
+Публичный адрес задаётся переменной `TB_GRAYLOG_URL` (по умолчанию
+`https://graylog.apps.monitoring.test`). Уже созданные алерты IRIS не изменяются
+автоматически: новая ссылка появляется у событий, принятых после обновления.
+
 ## Подготовка GLPI
 
 1. Настройка → Общие → API: включить REST API.

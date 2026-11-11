@@ -98,7 +98,8 @@ class _FakeGlpi:
 
 
 def _ev(msg, host="redos-server"):
-    return {"message": msg, "timestamp": "2026-11-09T16:00:00Z", "priority": 3,
+    return {"id": "01M73KJHZ78KZBCJ3K0H2JRZ1H", "message": msg,
+            "timestamp": "2026-11-09T16:00:00Z", "priority": 3,
             "event_definition_id": "d", "fields": {"host": host}}
 
 
@@ -203,6 +204,15 @@ def test_is_recovery_detection():
 
 # --- DFIR-IRIS v2/v3 ---------------------------------------------------------
 
+def test_graylog_replay_url_uses_event_id_and_fallback(monkeypatch):
+    monkeypatch.setattr(tb, "GRAYLOG", "https://graylog.test/")
+    assert tb.graylog_replay_url(_ev("test")) == (
+        "https://graylog.test/alerts/01M73KJHZ78KZBCJ3K0H2JRZ1H/replay-search")
+    assert tb.graylog_replay_url({"message": "no id"}) == "https://graylog.test/alerts"
+    assert tb.graylog_replay_url({"id": "unexpected/id"}) == (
+        "https://graylog.test/alerts/unexpected%2Fid/replay-search")
+
+
 class _FakeIrisResponse:
     def __enter__(self):
         return self
@@ -231,6 +241,9 @@ def test_send_iris_supports_v2_and_v3_endpoints(monkeypatch):
         payload = json.loads(request.data)
         assert payload["alert_source"] == "Graylog"
         assert payload["alert_status_id"] == 2
+        assert payload["alert_source_link"] == (
+            "https://graylog.apps.monitoring.test/alerts/"
+            "01M73KJHZ78KZBCJ3K0H2JRZ1H/replay-search")
 
 
 class _FakeIrisV3Response(_FakeIrisResponse):
