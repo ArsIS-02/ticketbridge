@@ -194,6 +194,29 @@ def alerts_create(alert: Alert, iocs: list[Ioc], assets: list[CaseAssets]) -> Al
 
     alert = call_modules_hook('on_postload_alert_create', alert)
 
+    # IRIS has no stock alert_created notification. Notify the API caller
+    # about a new unowned alert; an already assigned alert uses the stock
+    # alert_assigned notification instead, avoiding a duplicate message.
+    if not getattr(alert, 'alert_owner_id', None):
+        try:
+            from app.iris_engine.notifications.service import notify
+            notify(
+                user_id=int(_resolve_caller().id),
+                event_type='alert_created',
+                title='A new alert was received',
+                body=getattr(alert, 'alert_title', None) or '',
+                link=f'/alerts/{alert.alert_id}',
+                source_type='alert',
+                source_id=alert.alert_id,
+                default_channels={'in_app': True, 'email': True},
+            )
+        except Exception:
+            from app.logger import logger
+            logger.exception(
+                'Alert-created notification failed for alert #%s',
+                alert.alert_id,
+            )
+
     track_activity(f"created alert #{alert.alert_id} - {alert.alert_title}", ctx_less=True)
 
     socket_io.emit('new_alert', json.dumps({
