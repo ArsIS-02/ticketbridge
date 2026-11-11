@@ -259,3 +259,50 @@ def test_send_iris_accepts_direct_v3_response(monkeypatch):
                         lambda request, **kwargs: _FakeIrisV3Response())
     ok, alert_id = tb.send_iris(_ev("IRIS v3 response test"))
     assert ok and alert_id == "43"
+
+
+def test_send_iris_preserves_graylog_severity(monkeypatch):
+    requests = []
+    monkeypatch.setattr(tb, "IRIS", "https://iris.test")
+    monkeypatch.setattr(tb, "IRIS_KEY", "secret")
+    monkeypatch.setattr(tb.urllib.request, "urlopen",
+                        lambda request, **kwargs: requests.append(request) or _FakeIrisResponse())
+    for graylog_priority, iris_severity in ((1, 4), (2, 1), (3, 5)):
+        event = _ev(f"priority {graylog_priority}")
+        event["priority"] = graylog_priority
+        ok, _ = tb.send_iris(event)
+        assert ok
+        payload = json.loads(requests[-1].data)
+        assert payload["alert_severity_id"] == iris_severity
+
+
+def test_low_and_medium_go_only_to_iris(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpi)
+    monkeypatch.setattr(tb, "send_gelf", lambda *args, **kwargs: None)
+    _FakeGlpi.created, _FakeGlpi.followups = [], []
+    sent = []
+
+    def fake_iris(event):
+        sent.append(event["priority"])
+        return True, str(40 + event["priority"])
+
+    monkeypatch.setattr(tb, "send_iris", fake_iris)
+    for priority in (1, 2):
+        event = _ev(f"[TEST] priority {priority}")
+        event["priority"] = priority
+        assert tb.handle_event(event) is None
+    assert sent == [1, 2]
+    assert _FakeGlpi.created == [] and _FakeGlpi.followups == []
+
+
+def test_high_still_creates_glpi_and_iris(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "Glpi", _FakeGlpi)
+    monkeypatch.setattr(tb, "send_gelf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tb, "send_iris", lambda event: (True, "45"))
+    _FakeGlpi.created, _FakeGlpi.followups = [], []
+    event = _ev("[TEST] HIGH")
+    event["priority"] = 3
+    assert tb.handle_event(event) == 101
+    assert len(_FakeGlpi.created) == 1

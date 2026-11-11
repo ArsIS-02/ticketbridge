@@ -359,8 +359,15 @@ def _handle_event(event):
 
 
 def handle_event(event):
-    """Основная обработка (GLPI) + дублирование алерта в DFIR-IRIS."""
-    tid = _handle_event(event)
+    """HIGH → GLPI + IRIS; MEDIUM/LOW → только IRIS; восстановление → GLPI.
+
+    Одно HTTP-уведомление Graylog можно безопасно привязать ко всем активным
+    правилам: низкоприоритетные события не проходят в обработчик GLPI и не
+    меняют состояние корреляции тикетов. События восстановления по-прежнему
+    закрывают открытый тикет, но новый алерт IRIS не создают.
+    """
+    priority = int(event.get("priority") or 2)
+    tid = _handle_event(event) if priority == 3 or is_recovery(event) else None
     if not is_recovery(event):
         ok, info = send_iris(event)
         send_gelf(f"TicketBridge: IRIS {'алерт #' + info if ok else 'ОШИБКА: ' + info}",

@@ -1,11 +1,12 @@
 # TicketBridge
 
-Мост «Graylog → GLPI + DFIR-IRIS»: HTTP-уведомление Graylog о High-алерте превращается
-в тикет GLPI со ссылками на разбор в HomeWiki, отчёт TrafficLens и кнопкой
-блокировки IOC в BlockBoard. Действия логируются обратно в Graylog (GELF).
-Дополнительно каждый алерт дублируется в DFIR-IRIS для триажа и расследования
-инцидентов ИБ (если заданы `TB_IRIS_URL` и `TB_IRIS_KEY`). Поддерживаются IRIS v2
-(`POST /alerts/add`) и v3 (`POST /api/v2/alerts`), включая разные форматы ответа.
+Мост «Graylog → GLPI + DFIR-IRIS» маршрутизирует алерты по приоритету:
+High создаёт заявку GLPI со ссылками на разбор в HomeWiki, отчёт TrafficLens
+и кнопкой блокировки IOC в BlockBoard, а также алерт в IRIS; Medium и Low
+создают только алерт IRIS и не перегружают GLPI. Действия логируются обратно
+в Graylog (GELF). Поддерживаются IRIS v2 (`POST /alerts/add`) и v3
+(`POST /api/v2/alerts`), включая разные форматы ответа. Для передачи в IRIS
+нужны `TB_IRIS_URL` и `TB_IRIS_KEY`; без них мост продолжает обрабатывать GLPI.
 
 ```
 Graylog (HTTP notification) --POST /hook?key=...--> TicketBridge --REST--> GLPI Ticket
@@ -58,6 +59,30 @@ systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
 `https://graylog.apps.monitoring.test`). Уже созданные алерты IRIS не изменяются
 автоматически: новая ссылка появляется у событий, принятых после обновления.
 
+### Приоритеты и взятие в работу
+
+Сопоставление приоритетов: Graylog 3 → IRIS **High** (5), 2 → **Medium** (1),
+1 → **Low** (4). В GLPI попадает только High; для него urgency равна 5.
+Аналитик может изменить приоритет в карточке: **алерт → Edit → Severity → Save**.
+
+В лаборатории добавлен overlay `deploy/iris/alerts.py` для IRIS v3: штатное
+поведение не сообщает пользователю о его собственных действиях, а overlay
+отправляет письмо `alert_assigned`, когда владелец впервые становится текущим
+пользователем или меняется на него. Повторное редактирование Severity,
+описания и других полей своего алерта нового письма не создаёт. Для работы
+нужны настроенный SMTP, адрес пользователя и включённое email-уведомление
+**Alert assigned** в его профиле.
+
+Файл подключается только к сервису `app`, не к `worker`:
+
+```yaml
+- ./custom/business/alerts.py:/iriswebapp/app/business/alerts.py:ro,z
+```
+
+После копирования файла в `custom/business/alerts.py` выполнить
+`podman-compose up -d app`. При обновлении версии IRIS overlay нужно сверить
+с новым `app/business/alerts.py`, а не переносить вслепую.
+
 ## Подготовка GLPI
 
 1. Настройка → Общие → API: включить REST API.
@@ -81,8 +106,25 @@ systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
 ## Graylog
 
 System → Alerts → Notifications → HTTP Notification:
-URL `http://127.0.0.1:8099/hook?key=<TB_KEY>`. Привязать к правилам
-с приоритетом High. Приоритет 3 → urgency 5, 2 → 3, 1 → 1.
+URL `http://127.0.0.1:8099/hook?key=<TB_KEY>`. Одно уведомление
+`GLPI Ticket (TicketBridge)` привязывается ко **всем активным правилам**,
+а мост сам разделяет маршруты GLPI и IRIS по приоритету.
+
+Для безопасной массовой привязки используется `tools/sync_graylog_iris.py`:
+
+```bash
+export GRAYLOG_URL='https://graylog.apps.monitoring.test'
+export GRAYLOG_TOKEN='<access-token>'
+python3 tools/sync_graylog_iris.py             # только dry-run
+python3 tools/sync_graylog_iris.py --apply     # backup, обновление, проверка
+```
+
+Скрипт не меняет отключённые правила и правила с `alert=false`, перед записью
+повторно читает каждое определение и сохраняет JSON-копии с правами `0600` в
+`~/ticketbridge/backups/iris-all-alerts-<timestamp>/`. Для пилота есть
+`--only-id <event-definition-id>`. На 11.11.2026 проверена привязка 255/255
+активных правил; сквозные тесты Low, Medium и High подтвердили создание алертов
+IRIS, при этом GLPI-заявки для Low и Medium не создаются.
 
 ## Проверка
 
