@@ -128,11 +128,20 @@ python3 tools/sync_graylog_iris.py --apply     # backup, обновление, �
 активных правил; сквозные тесты Low, Medium и High подтвердили создание алертов
 IRIS, при этом GLPI-заявки для Low и Medium не создаются.
 
-### Мгновенные письма без дублей
+### Мгновенные письма Graylog и IRIS
 
-IRIS с лабораторным overlay является основным отправителем писем о новых алертах.
-Чтобы Graylog не отправлял второе письмо о том же событии, используется
-`tools/sync_graylog_mail.py`:
+По выбору владельца лаборатории мгновенные письма отправляют **оба канала**:
+Graylog и IRIS. Поэтому об одном событии могут прийти два письма — это ожидаемое
+поведение, а не ошибка маршрутизации. Ежедневные дайджесты работают отдельно.
+
+11.11.2026 мгновенные email-привязки Graylog восстановлены у **252 активных
+правил**. Все **255/255** webhook-привязок TicketBridge сохранены, уведомления
+IRIS `alert_created` и `alert_assigned` не отключались. **Mail.ru Alert Daily
+Digest** и **Mail.ru Daily Digest** также сохранены. Результат проверен через
+API Graylog; это не заменяет проверку доставки конкретного письма в ящик.
+
+Если позже понадобится оставить только IRIS как отправителя мгновенных писем,
+используется `tools/sync_graylog_mail.py`:
 
 ```bash
 python3 tools/sync_graylog_mail.py             # dry-run: показать дубли
@@ -146,11 +155,21 @@ python3 tools/sync_graylog_mail.py --only-id <event-definition-id> --apply
 и все прочие привязки. JSON-копии до и после сохраняются с правами `0600` в
 `~/ticketbridge/backups/iris-mail-primary-<timestamp>/`.
 
-11.11.2026 отключены дубли у **252 правил**, все **255/255** webhook-привязок
-TicketBridge сохранены. Привязки **Mail.ru Alert Daily Digest** и
-**Mail.ru Daily Digest** у трёх правил совпали до и после операции. Повторный
-dry-run показывает ноль дублей. Сквозные проверки Low, Medium и High создали
-алерты IRIS № 89–91, у всех трёх `alert_created` заполнен `emailed_at`.
+Обратное восстановление выполняется из этих частных копий скриптом
+`tools/restore_graylog_mail.py`. Сначала обязателен dry-run, затем `--apply`:
+
+```bash
+python3 tools/restore_graylog_mail.py \
+  --backup ~/ticketbridge/backups/iris-mail-primary-20261111T112018Z \
+  --backup ~/ticketbridge/backups/iris-mail-primary-20261111T112037Z
+# Повторить ту же команду с --apply после проверки списка.
+```
+
+Restore объединяет сохранённые привязки, добавляет только отсутствующие и перед
+каждым PUT повторно читает текущее определение, поэтому позднейшие изменения и
+другие уведомления не затираются. Свежая копия создаётся в
+`~/ticketbridge/backups/graylog-mail-restored-<timestamp>/`; фактическая копия
+восстановления 11.11.2026 — `graylog-mail-restored-20261111T132748Z`.
 
 ## Проверка
 
