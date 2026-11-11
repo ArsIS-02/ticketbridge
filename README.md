@@ -35,8 +35,12 @@ systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
 
 ## Настройка DFIR-IRIS
 
-- IRIS v2.4.x: `TB_IRIS_API_PATH=/alerts/add` (значение по умолчанию).
+- IRIS v2.4.x: `TB_IRIS_API_PATH=/alerts/add` (значение по умолчанию в коде).
 - IRIS v3: `TB_IRIS_API_PATH=/api/v2/alerts`.
+
+В нашей лаборатории с 11.11.2026 используется IRIS v3.0.0-beta.23 и
+`TB_IRIS_API_PATH=/api/v2/alerts`; пример `ticketbridge.env.example` соответствует
+этой конфигурации.
 
 Путь должен начинаться с `/` и относиться к хосту из `TB_IRIS_URL`. API-ключ
 передаётся как `Authorization: Bearer <TB_IRIS_KEY>`. Для v3 проверено создание
