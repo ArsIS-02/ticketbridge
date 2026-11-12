@@ -1,0 +1,8 @@
+[Unit]
+Description=Independent SOC watchdog for Zabbix, Graylog, IRIS and TicketBridge
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/zabbix-suite/watchdog.env
+ExecStart=/usr/bin/python3 %h/zabbix-suite/soc_watchdog.py

@@ -1,0 +1,8 @@
+[Unit]
+Description=Zabbix noise, flapping, MTTA and MTTR analytics
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/zabbix-suite/watchdog.env
+ExecStart=/usr/bin/python3 %h/zabbix_suite.py report --days 7 --output-dir %h/zabbix-suite/reports

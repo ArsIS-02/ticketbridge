@@ -105,6 +105,42 @@ TicketBridge это administrator. Если алерт создан уже на�
 - События `tb_event=closed_recovery` / `autoclose` уходят в Graylog, так что
   Lab Score видит честное время жизни тикетов (MTTR).
 
+## Интеграция Zabbix
+
+Для событий Zabbix мост использует `alert_source_ref=zabbix:<event_id>`,
+сохраняет важность источника и добавляет ссылки на событие Zabbix, Replay Search
+в Graylog и рунбук HomeWiki. Заголовок строится из `zabbix_trigger_name` и имени
+хоста. Соответствие важности: Zabbix 0–2 → IRIS Low, 3 → Medium, 4–5 → High;
+обычные Graylog-алерты используют прежнее соответствие, описанное выше.
+
+После `RESOLVED` мост закрывает связанный алерт IRIS статусом `6` и добавляет
+комментарий с event ID, длительностью и ссылками. Ошибка комментария логируется
+как `iris_comment_error`, но не отменяет успешное закрытие. Дедупликация по
+event ID сохраняется в SQLite и не создаёт новый алерт при повторной доставке.
+
+В агрегационных правилах Graylog передаваемые поля должны быть одновременно в
+`group_by` и `field_spec`. Безопасное обновление обоих Zabbix-правил:
+
+```bash
+python3 tools/sync_zabbix_graylog_fields.py          # dry-run
+python3 tools/sync_zabbix_graylog_fields.py --apply  # backup, update, verify
+```
+
+В `tools/` также находятся:
+
+- `zabbix_suite.py` — сервисная модель, SLA, карта, окна обслуживания и отчёты
+  по шуму/флаппингу/MTTA/MTTR;
+- `soc_watchdog.py` — проверка Zabbix, Graylog, IRIS и TicketBridge с trapper-
+  метриками и authenticated GELF fallback при недоступности Zabbix;
+- `soc-watchdog.service`, `soc-watchdog.timer`, `zabbix-analytics.service`,
+  `zabbix-analytics.timer` — пользовательские systemd-юниты;
+- `test_zabbix_suite_e2e.py` — двухфазный сквозной тест PROBLEM/RESOLVED с
+  восстановлением важности триггера и очисткой тестовых объектов.
+
+Секреты передаются через окружение; на сервере таймеры читают защищённый
+`~/zabbix-suite/watchdog.env`. Подробная схема и руководство:
+`https://homewiki.apps.monitoring.test/rules/art-zabbix-graylog-iris`.
+
 ## Graylog
 
 System → Alerts → Notifications → HTTP Notification:

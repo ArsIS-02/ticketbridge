@@ -62,6 +62,9 @@ URGENCY = {3: 5, 2: 3, 1: 1}   # Graylog priority -> GLPI urgency
 IRIS = os.environ.get("TB_IRIS_URL", "").rstrip("/")   # https://iris.apps.monitoring.test
 IRIS_KEY = os.environ.get("TB_IRIS_KEY", "")
 IRIS_SEVERITY = {3: 5, 2: 1, 1: 4}   # Graylog priority -> IRIS severity (High/Medium/Low)
+ZABBIX_IRIS_SEVERITY = {0: 4, 1: 4, 2: 4, 3: 1, 4: 5, 5: 5}
+ZABBIX_HOMEWIKI = os.environ.get(
+    "TB_ZABBIX_HOMEWIKI", HOMEWIKI + "/rules/art-zabbix-graylog-iris")
 IRIS_API_PATH = os.environ.get("TB_IRIS_API_PATH", "/alerts/add")
 if not IRIS_API_PATH.startswith("/") or IRIS_API_PATH.startswith("//"):
     raise ValueError("TB_IRIS_API_PATH must be an absolute path on the IRIS host")
@@ -135,23 +138,84 @@ def esc(s):
     return html.escape(str(s))
 
 
+def http_url(value):
+    """Вернуть только абсолютную HTTP(S)-ссылку, безопасную для HTML."""
+    value = str(value or "").strip()
+    parsed = urlparse(value)
+    return value if parsed.scheme in ("http", "https") and parsed.netloc else ""
+
+
+def zabbix_runbook(fields):
+    """Рунбук из поля/тега Zabbix; иначе общая статья интеграции."""
+    for key in ("runbook", "zabbix_runbook", "zabbix_trigger_url"):
+        url = http_url(fields.get(key))
+        if url:
+            return url
+    raw_tags = fields.get("zabbix_tags_json")
+    try:
+        tags = json.loads(raw_tags) if isinstance(raw_tags, str) else raw_tags
+        if isinstance(tags, dict):
+            url = http_url(tags.get("runbook"))
+            if url:
+                return url
+        elif isinstance(tags, list):
+            for tag in tags:
+                if isinstance(tag, dict) and tag.get("tag") == "runbook":
+                    url = http_url(tag.get("value"))
+                    if url:
+                        return url
+    except (TypeError, ValueError):
+        pass
+    return ZABBIX_HOMEWIKI
+
+
+def zabbix_iris_severity(fields, graylog_priority):
+    """Важность Zabbix → IRIS; обычные Graylog-алерты не изменяются."""
+    try:
+        zabbix_priority = int(float(str(fields["zabbix_nseverity"]).strip()))
+    except (KeyError, TypeError, ValueError):
+        return IRIS_SEVERITY.get(graylog_priority, 1)
+    return ZABBIX_IRIS_SEVERITY.get(zabbix_priority,
+                                    IRIS_SEVERITY.get(graylog_priority, 1))
+
+
 def compose_ticket(event):
     """(тема, HTML-описание, urgency) из события Graylog."""
     msg = event.get("message") or "событие Graylog"
     f = event.get("fields") or {}
+    is_zabbix = bool(str(f.get("zabbix_event_id") or "").strip())
     rows = "".join(f"<tr><td style='color:#888'>{esc(k)}</td><td>{esc(v)}</td></tr>"
                    for k, v in list(f.items())[:15])
-    links = [f"<a href='{HOMEWIKI}/rules/{event.get('event_definition_id')}'>📖 Разбор в HomeWiki</a>"]
+    links, seen_urls = [], set()
+
+    def add_link(url, label):
+        url = http_url(url)
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            links.append(f"<a href='{esc(url)}'>{label}</a>")
+
+    add_link(f"{HOMEWIKI}/rules/{event.get('event_definition_id')}",
+             "📖 Разбор в HomeWiki")
+    if is_zabbix:
+        add_link(f.get("zabbix_url"), "🚨 Событие Zabbix")
+        add_link(graylog_replay_url(event), "🔎 Replay Search в Graylog")
+        add_link(zabbix_runbook(f), "📖 Рунбук в HomeWiki")
     ioc, itype = f.get("ioc"), f.get("ioc_type")
     if ioc and itype in ("ip", "domain"):
         links.append(f"<a href='{BLOCKBOARD}/?block={esc(ioc)}&reason=Graylog'>🛡 Заблокировать {esc(ioc)}</a>")
-    if f.get("tl_report"):
-        links.append(f"<a href='{esc(f['tl_report'])}'>📊 Отчёт TrafficLens</a>")
+    add_link(f.get("tl_report"), "📊 Отчёт TrafficLens")
     content = (f"<b>{esc(msg)}</b><br>Время: {esc(event.get('timestamp'))}<br>"
                f"Приоритет: {esc(event.get('priority'))}<br><br>"
                f"<table>{rows}</table><br>" + " · ".join(links))
     prio = int(event.get("priority") or 2)
-    return f"[Graylog] {msg}"[:250], content, URGENCY.get(prio, 3)
+    if is_zabbix:
+        trigger = str(f.get("zabbix_trigger_name") or
+                      f.get("zabbix_trigger_description") or msg).strip()
+        host = str(f.get("host") or "").strip()
+        title = f"[Zabbix] {trigger}" + (f" — {host}" if host else "")
+    else:
+        title = f"[Graylog] {msg}"
+    return title[:250], content, URGENCY.get(prio, 3)
 
 
 def graylog_replay_url(event):
@@ -163,30 +227,11 @@ def graylog_replay_url(event):
     return f"{base}/alerts/{quote(str(event_id), safe='')}/replay-search"
 
 
-def send_iris(event):
-    """Дублирует алерт Graylog в DFIR-IRIS через настроенный API endpoint.
+IRIS_LOCK = threading.Lock()
 
-    IRIS v2 использует /alerts/add, IRIS v3 — /api/v2/alerts.
-    Не влияет на основной поток: при ошибке только предупреждение в GELF.
-    Возвращает (ok, info).
-    """
-    if not IRIS or not IRIS_KEY:
-        return False, "disabled"
-    f = event.get("fields") or {}
-    prio = int(event.get("priority") or 2)
-    payload = {
-        "alert_title": (event.get("message") or "событие Graylog")[:250],
-        "alert_description": compose_ticket(event)[1],
-        "alert_source": "Graylog",
-        "alert_source_ref": str(event.get("event_definition_id") or event.get("key") or ""),
-        "alert_source_link": graylog_replay_url(event),
-        "alert_severity_id": IRIS_SEVERITY.get(prio, 1),
-        "alert_status_id": 2,   # New
-        "alert_source_event_time": event.get("timestamp") or "",
-        "alert_tags": "graylog,ticketbridge",
-        "alert_customer_id": 1,
-        "alert_source_content": event,
-    }
+
+def _post_iris(payload):
+    """Создать алерт IRIS и вернуть (ok, alert_id/ошибка)."""
     try:
         req = urllib.request.Request(
             IRIS + IRIS_API_PATH, method="POST",
@@ -208,6 +253,147 @@ def send_iris(event):
         return False, str(e)[:200]
 
 
+def send_iris(event):
+    """Дублирует алерт Graylog в DFIR-IRIS через настроенный API endpoint.
+
+    IRIS v2 использует /alerts/add, IRIS v3 — /api/v2/alerts.
+    Для Zabbix один event ID навсегда соответствует одному алерту IRIS;
+    соответствие хранится в SQLite и переживает перезапуск TicketBridge.
+    Не влияет на основной поток: при ошибке только предупреждение в GELF.
+    Возвращает (ok, info).
+    """
+    if not IRIS or not IRIS_KEY:
+        return False, "disabled"
+    f = event.get("fields") or {}
+    zabbix_event_id = str(f.get("zabbix_event_id") or "").strip()
+    source_ref = (f"zabbix:{zabbix_event_id}" if zabbix_event_id else
+                  str(event.get("event_definition_id") or event.get("key") or ""))
+    prio = int(event.get("priority") or 2)
+    title, description, _ = compose_ticket(event)
+    payload = {
+        "alert_title": (title if zabbix_event_id else
+                        (event.get("message") or "событие Graylog"))[:250],
+        "alert_description": description,
+        "alert_source": "Graylog",
+        "alert_source_ref": source_ref,
+        "alert_source_link": graylog_replay_url(event),
+        "alert_severity_id": (zabbix_iris_severity(f, prio) if zabbix_event_id
+                              else IRIS_SEVERITY.get(prio, 1)),
+        "alert_status_id": 2,   # New
+        "alert_source_event_time": event.get("timestamp") or "",
+        "alert_tags": "graylog,ticketbridge,zabbix" if zabbix_event_id else "graylog,ticketbridge",
+        "alert_customer_id": 1,
+        "alert_source_content": event,
+    }
+    if not zabbix_event_id:
+        return _post_iris(payload)
+
+    # IRIS v3 в этой установке игнорирует alert_source_ref при фильтрации
+    # списка, поэтому используем постоянное локальное соответствие и блокировку.
+    with IRIS_LOCK:
+        con = state_db()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT alert_id FROM iris_dedup WHERE dedup_key=?",
+                              (source_ref,)).fetchone()
+            if row:
+                con.commit()
+                send_gelf(f"TicketBridge: повтор Zabbix {zabbix_event_id}, "
+                          f"используется существующий IRIS алерт #{row[0]}",
+                          tool="ticketbridge", tb_event="iris_duplicate",
+                          zabbix_event_id=zabbix_event_id, iris_alert_id=row[0])
+                return True, str(row[0])
+            ok, info = _post_iris(payload)
+            if ok and info:
+                con.execute("INSERT INTO iris_dedup(dedup_key, alert_id, created_ts) VALUES(?,?,?)",
+                            (source_ref, int(info), time.time()))
+            con.commit()
+            return ok, info
+        except Exception as e:
+            con.rollback()
+            return False, str(e)[:200]
+        finally:
+            con.close()
+
+
+def is_zabbix_recovery(event):
+    """RESOLVED от Zabbix закрывает алерт исходного PROBLEM, а не создаёт новый.
+
+    В aggregation-вебхуке Graylog поле статуса может отсутствовать, поэтому
+    дополнительно распознаём ID и точный заголовок правила восстановления.
+    """
+    f = event.get("fields") or {}
+    if str(f.get("zabbix_event_status") or "").strip().upper() == "RESOLVED":
+        return True
+    if not str(f.get("zabbix_event_id") or "").strip():
+        return False
+    recovery_definition = os.environ.get(
+        "TB_ZABBIX_RECOVERY_DEFINITION", "6af4b20861b983feab70ed30")
+    title = str(event.get("event_definition_title") or event.get("message") or "")
+    return (str(event.get("event_definition_id") or "") == recovery_definition or
+            "ZABBIX - Проблема устранена (RESOLVED)" in title)
+
+
+def close_iris(event):
+    """Закрыть алерт IRIS и добавить историю восстановления комментарием.
+
+    Комментарий best-effort: его ошибка журналируется, но не отменяет уже
+    успешное закрытие. not_found означает, что PROBLEM здесь не регистрировался.
+    """
+    if not IRIS or not IRIS_KEY:
+        return False, "disabled"
+    f = event.get("fields") or {}
+    zabbix_event_id = str(f.get("zabbix_event_id") or "").strip()
+    if not zabbix_event_id:
+        return False, "no_zabbix_event_id"
+    source_ref = f"zabbix:{zabbix_event_id}"
+    with IRIS_LOCK:
+        con = state_db()
+        row = con.execute("SELECT alert_id FROM iris_dedup WHERE dedup_key=?",
+                          (source_ref,)).fetchone()
+        con.close()
+        if not row:
+            return False, "not_found"
+        alert_id = int(row[0])
+        try:
+            req = urllib.request.Request(
+                f"{IRIS}/api/v2/alerts/{alert_id}", method="PUT",
+                data=json.dumps({"alert_status_id": 6}).encode(),
+                headers={"Authorization": "Bearer " + IRIS_KEY,
+                         "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15, context=CTX) as response:
+                response.read()
+        except Exception as e:
+            return False, str(e)[:200]
+
+        comment = ["✅ Восстановлено автоматически по событию Zabbix RESOLVED.",
+                   "", f"- Event ID: `{zabbix_event_id}`",
+                   f"- Время восстановления: {event.get('timestamp') or 'не указано'}"]
+        if f.get("zabbix_event_duration"):
+            comment.append(f"- Длительность проблемы: {f['zabbix_event_duration']}")
+        for url, label in ((f.get("zabbix_url"), "Событие Zabbix"),
+                           (graylog_replay_url(event), "Replay Search в Graylog"),
+                           (zabbix_runbook(f), "Рунбук в HomeWiki")):
+            url = http_url(url)
+            if url:
+                comment.append(f"- [{label}]({url})")
+        try:
+            req = urllib.request.Request(
+                f"{IRIS}/api/v2/alerts/{alert_id}/comments", method="POST",
+                data=json.dumps({"comment_text": "\n".join(comment)},
+                                ensure_ascii=False).encode(),
+                headers={"Authorization": "Bearer " + IRIS_KEY,
+                         "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15, context=CTX) as response:
+                response.read()
+        except Exception as e:
+            send_gelf(f"TicketBridge: IRIS алерт #{alert_id} закрыт, "
+                      f"но комментарий восстановления не добавлен: {e}",
+                      tool="ticketbridge", tb_event="iris_comment_error",
+                      iris_alert_id=alert_id, zabbix_event_id=zabbix_event_id)
+        return True, str(alert_id)
+
+
 def send_gelf(short, **fields):
     msg = {"version": "1.1", "host": HOST, "short_message": short,
            "timestamp": time.time(), "level": 4}
@@ -227,10 +413,12 @@ def corr_key(event):
 
 
 def state_db():
-    con = sqlite3.connect(STATE_DB)
+    con = sqlite3.connect(STATE_DB, timeout=30)
     con.execute("""CREATE TABLE IF NOT EXISTS incidents(
         corr_key TEXT PRIMARY KEY, ticket_id INTEGER,
         first_ts REAL, last_ts REAL, cnt INTEGER, last_msg TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS iris_dedup(
+        dedup_key TEXT PRIMARY KEY, alert_id INTEGER NOT NULL, created_ts REAL NOT NULL)""")
     return con
 
 
@@ -359,13 +547,28 @@ def _handle_event(event):
 
 
 def handle_event(event):
-    """HIGH → GLPI + IRIS; MEDIUM/LOW → только IRIS; восстановление → GLPI.
+    """HIGH → GLPI + IRIS; MEDIUM/LOW → только IRIS; восстановление → закрытие.
 
-    Одно HTTP-уведомление Graylog можно безопасно привязать ко всем активным
-    правилам: низкоприоритетные события не проходят в обработчик GLPI и не
-    меняют состояние корреляции тикетов. События восстановления по-прежнему
-    закрывают открытый тикет, но новый алерт IRIS не создают.
+    Zabbix RESOLVED закрывает алерт исходного PROBLEM в IRIS по сохранённому
+    zabbix_event_id и не затрагивает GLPI. Остальные события восстановления
+    по-прежнему закрывают только открытый тикет GLPI.
     """
+    if is_zabbix_recovery(event):
+        ok, info = close_iris(event)
+        f = event.get("fields") or {}
+        zabbix_event_id = str(f.get("zabbix_event_id") or "")
+        if ok:
+            send_gelf(f"TicketBridge: IRIS алерт #{info} закрыт по Zabbix RESOLVED "
+                      f"{zabbix_event_id}", tool="ticketbridge", tb_event="iris_closed",
+                      iris_alert_id=int(info), zabbix_event_id=zabbix_event_id,
+                      corr=corr_key(event))
+        else:
+            event_type = "iris_recovery_skip" if info == "not_found" else "iris_recovery_error"
+            send_gelf(f"TicketBridge: Zabbix RESOLVED {zabbix_event_id}: {info}",
+                      tool="ticketbridge", tb_event=event_type,
+                      zabbix_event_id=zabbix_event_id, corr=corr_key(event))
+        return None
+
     priority = int(event.get("priority") or 2)
     tid = _handle_event(event) if priority == 3 or is_recovery(event) else None
     if not is_recovery(event):

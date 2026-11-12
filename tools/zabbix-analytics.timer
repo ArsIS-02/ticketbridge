@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Zabbix analytics hourly
+
+[Timer]
+OnCalendar=*-*-* *:17:00
+Persistent=true
+Unit=zabbix-analytics.service
+
+[Install]
+WantedBy=timers.target
