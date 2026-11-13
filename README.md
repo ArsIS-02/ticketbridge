@@ -85,6 +85,34 @@ TicketBridge это administrator. Если алерт создан уже на�
 `podman-compose up -d app`. При обновлении версии IRIS overlay нужно сверить
 с новым `app/business/alerts.py`, а не переносить вслепую.
 
+### Обогащение алертов активами (HostDeck)
+
+TicketBridge подтягивает в каждый алерт IRIS затронутые **активы** и **IOC**:
+
+- Поля события `srcip`/`dstip`/`agent_ip`/`source`/`host`/`user` и др.
+  сопоставляются с инвентарём **HostDeck** (экспорт
+  `/api/export/hosts.csv?key=ip|name`).
+- Известные адреса и имена становятся активами алерта с типом по данным
+  HostDeck: Linux Server/Computer, Mac, Windows, Router (Keenetic), DC.
+- Учётные записи из полей `user`/`acct`/`username` — активы **Account**.
+- Неизвестные HostDeck IP-адреса попадают в алерт как IOC `ip-any`.
+- При эскалации алерта в кейс активы и IOC переносятся автоматически и
+  участвуют в графе связей кейса.
+
+Настройка в `ticketbridge.env`:
+
+```ini
+TB_HOSTDECK_URL=http://127.0.0.1:8080
+TB_HOSTDECK_TOKEN=<HOSTDECK_EXPORT_TOKEN>
+TB_HOSTDECK_TTL=300          # кеш инвентаря, секунд
+```
+
+Пустой `TB_HOSTDECK_TOKEN` отключает обогащение. Инвентарь кешируется, при
+недоступности HostDeck используется последний кеш — доставка алертов не
+ломается (предупреждение уходит в Graylog как `tb_event=hostdeck_error`).
+Сопоставление типов активов задано в `app.py` (`_asset_type_for`) и легко
+правится под свой инвентарь.
+
 ## Подготовка GLPI
 
 1. Настройка → Общие → API: включить REST API.

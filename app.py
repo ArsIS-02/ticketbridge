@@ -19,9 +19,15 @@ ENV:
   TB_RECOVERY_RE  — regex события восстановления (agent_recovered|вернулся):
                     такое событие сразу закрывает открытый тикет хоста
   TB_STATE_DB     — SQLite соответствий хост→тикет (state.db рядом с app.py)
+  TB_HOSTDECK_URL — база HostDeck (http://127.0.0.1:8080) для обогащения
+                    алертов IRIS активами; пустой токен отключает обогащение
+  TB_HOSTDECK_TOKEN — токен экспорта HostDeck (HOSTDECK_EXPORT_TOKEN)
+  TB_HOSTDECK_TTL — кеш инвентаря HostDeck в секундах (300)
 """
+import csv
 import gzip
 import html
+import io
 import json
 import os
 import re
@@ -195,15 +201,15 @@ def compose_ticket(event):
             links.append(f"<a href='{esc(url)}'>{label}</a>")
 
     add_link(f"{HOMEWIKI}/rules/{event.get('event_definition_id')}",
-             "📖 Разбор в HomeWiki")
+             "ð Разбор в HomeWiki")
     if is_zabbix:
-        add_link(f.get("zabbix_url"), "🚨 Событие Zabbix")
-        add_link(graylog_replay_url(event), "🔎 Replay Search в Graylog")
-        add_link(zabbix_runbook(f), "📖 Рунбук в HomeWiki")
+        add_link(f.get("zabbix_url"), "ð¨ Событие Zabbix")
+        add_link(graylog_replay_url(event), "ð Replay Search в Graylog")
+        add_link(zabbix_runbook(f), "ð Рунбук в HomeWiki")
     ioc, itype = f.get("ioc"), f.get("ioc_type")
     if ioc and itype in ("ip", "domain"):
-        links.append(f"<a href='{BLOCKBOARD}/?block={esc(ioc)}&reason=Graylog'>🛡 Заблокировать {esc(ioc)}</a>")
-    add_link(f.get("tl_report"), "📊 Отчёт TrafficLens")
+        links.append(f"<a href='{BLOCKBOARD}/?block={esc(ioc)}&reason=Graylog'>ð¡ Заблокировать {esc(ioc)}</a>")
+    add_link(f.get("tl_report"), "ð Отчёт TrafficLens")
     content = (f"<b>{esc(msg)}</b><br>Время: {esc(event.get('timestamp'))}<br>"
                f"Приоритет: {esc(event.get('priority'))}<br><br>"
                f"<table>{rows}</table><br>" + " · ".join(links))
@@ -228,6 +234,147 @@ def graylog_replay_url(event):
 
 
 IRIS_LOCK = threading.Lock()
+
+# --- Обогащение алертов IRIS активами из HostDeck --------------------------
+# ID типов активов IRIS (таблица assets_type)
+ASSET_TYPE_ACCOUNT = 1
+ASSET_TYPE_LINUX_SERVER = 3
+ASSET_TYPE_LINUX_COMPUTER = 4
+ASSET_TYPE_MAC = 6
+ASSET_TYPE_WINDOWS = 9
+ASSET_TYPE_WINDOWS_DC = 11
+ASSET_TYPE_ROUTER = 12
+# ID типов IOC IRIS (таблица ioc_type)
+IOC_TYPE_IP_ANY = 76
+
+HOSTDECK = os.environ.get("TB_HOSTDECK_URL", "http://127.0.0.1:8080").rstrip("/")
+HOSTDECK_TOKEN = os.environ.get("TB_HOSTDECK_TOKEN", "")
+HOSTDECK_TTL = int(os.environ.get("TB_HOSTDECK_TTL", "300"))
+
+_HD_CACHE = {"ts": 0.0, "by_ip": {}, "by_name": {}}
+HD_LOCK = threading.Lock()
+_IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+_IP_FIND_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# поля события Graylog, где ищем адреса, имена хостов и учётные записи
+_ASSET_IP_KEYS = {"srcip", "dstip", "source_ip", "agent_ip", "gl2_remote_ip",
+                  "ip", "src", "dst"}
+_ASSET_HOST_KEYS = {"source", "host", "hostname", "node", "device", "agent_name"}
+_ASSET_USER_KEYS = {"user", "username", "acct", "account", "suser",
+                    "winlog_event_data_targetusername"}
+
+
+def hostdeck_lookup():
+    """Карты ip→info и name→info из экспорта HostDeck; кеш TB_HOSTDECK_TTL сек.
+
+    При любой ошибке возвращает последний кеш (или пустые карты):
+    обогащение активами никогда не ломает основной поток Graylog→IRIS.
+    """
+    if not HOSTDECK_TOKEN:
+        return _HD_CACHE["by_ip"], _HD_CACHE["by_name"]
+    now = time.time()
+    with HD_LOCK:
+        if now - _HD_CACHE["ts"] < HOSTDECK_TTL:
+            return _HD_CACHE["by_ip"], _HD_CACHE["by_name"]
+        by_ip, by_name = {}, {}
+        try:
+            for key, dest in (("ip", by_ip), ("name", by_name)):
+                req = urllib.request.Request(
+                    f"{HOSTDECK}/api/export/hosts.csv?key={key}&header=0",
+                    headers={"X-Hostdeck-Token": HOSTDECK_TOKEN})
+                with urllib.request.urlopen(req, timeout=10, context=CTX) as r:
+                    text = r.read().decode("utf-8", "replace")
+                for row in csv.reader(io.StringIO(text)):
+                    if len(row) < 4 or not row[0].strip():
+                        continue
+                    dest[row[0].strip().lower()] = {
+                        "name": row[1].strip(), "os": row[2].strip(),
+                        "profile": row[3].strip()}
+            _HD_CACHE.update(ts=now, by_ip=by_ip, by_name=by_name)
+        except Exception as e:
+            send_gelf(f"TicketBridge: HostDeck недоступен, обогащение по кешу: {e}",
+                      tool="ticketbridge", tb_event="hostdeck_error")
+        return _HD_CACHE["by_ip"], _HD_CACHE["by_name"]
+
+
+def _asset_type_for(info):
+    """Тип актива IRIS по данным HostDeck (ОС, профиль, имя)."""
+    name = (info.get("name") or "").lower()
+    os_ = (info.get("os") or "").lower()
+    profile = (info.get("profile") or "").lower()
+    if "keenetic" in name or "router" in name:
+        return ASSET_TYPE_ROUTER
+    if name.startswith("dc.") or profile == "dc":
+        return ASSET_TYPE_WINDOWS_DC
+    if "mac" in os_ or "mac" in name:
+        return ASSET_TYPE_MAC
+    if "win" in os_ or "windows" in name or name.startswith(("w10", "w11")):
+        return ASSET_TYPE_WINDOWS
+    if os_.startswith("linux"):
+        return ASSET_TYPE_LINUX_COMPUTER if profile == "laptop" else ASSET_TYPE_LINUX_SERVER
+    return ASSET_TYPE_LINUX_SERVER if profile == "server" else ASSET_TYPE_LINUX_COMPUTER
+
+
+def collect_observables(event):
+    """(alert_assets, alert_iocs) из полей события Graylog.
+
+    Адреса и имена, известные HostDeck, становятся активами IRIS; неизвестные
+    IP — IOC (ip-any). Учётные записи из полей user/acct/... — активы Account.
+    Максимум 10 активов и 10 IOC на алерт.
+    """
+    f = event.get("fields") or {}
+    by_ip, by_name = hostdeck_lookup()
+    ips, names, users = set(), set(), set()
+    for k, v in f.items():
+        if not isinstance(v, str):
+            continue
+        kl = k.lower()
+        if kl in _ASSET_IP_KEYS:
+            ips.update(x for x in _IP_FIND_RE.findall(v))
+        elif kl in _ASSET_HOST_KEYS:
+            val = v.strip()
+            if _IP_RE.match(val):
+                ips.add(val)
+            elif re.match(r"^[A-Za-z0-9_.-]{2,64}$", val):
+                names.add(val.lower())
+        elif kl in _ASSET_USER_KEYS:
+            val = v.strip()
+            if re.match(r"^[A-Za-z0-9_.@\\-]{2,64}$", val) and not _IP_RE.match(val):
+                users.add(val)
+    src = str(event.get("source") or "").strip()
+    if _IP_RE.match(src):
+        ips.add(src)
+    elif re.match(r"^[A-Za-z0-9_.-]{2,64}$", src):
+        names.add(src.lower())
+
+    assets, iocs = [], []
+
+    def add_asset(name, type_id, ip="", info=None, desc=""):
+        for a in assets:
+            if a["asset_name"].lower() == name.lower():
+                return
+        asset = {"asset_name": name, "asset_type_id": type_id}
+        if ip:
+            asset["asset_ip"] = ip
+        if info is not None:
+            parts = [p for p in (info.get("os"), info.get("profile")) if p]
+            desc = "HostDeck" + (": " + " / ".join(parts) if parts else "")
+        if desc:
+            asset["asset_description"] = desc
+        assets.append(asset)
+
+    for ip in sorted(ips):
+        info = by_ip.get(ip.lower())
+        if info:
+            add_asset(info["name"], _asset_type_for(info), ip, info=info)
+        else:
+            iocs.append({"ioc_value": ip, "ioc_type_id": IOC_TYPE_IP_ANY})
+    for nm in sorted(names):
+        info = by_name.get(nm)
+        if info:
+            add_asset(info["name"], _asset_type_for(info), info=info)
+    for user in sorted(users):
+        add_asset(user, ASSET_TYPE_ACCOUNT, desc="Учётная запись из события Graylog")
+    return assets[:10], iocs[:10]
 
 
 def _post_iris(payload):
@@ -285,6 +432,14 @@ def send_iris(event):
         "alert_customer_id": 1,
         "alert_source_content": event,
     }
+    try:
+        assets, iocs = collect_observables(event)
+    except Exception:
+        assets, iocs = [], []
+    if assets:
+        payload["alert_assets"] = assets
+    if iocs:
+        payload["alert_iocs"] = iocs
     if not zabbix_event_id:
         return _post_iris(payload)
 
