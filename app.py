@@ -190,8 +190,17 @@ def compose_ticket(event):
     msg = event.get("message") or "событие Graylog"
     f = event.get("fields") or {}
     is_zabbix = bool(str(f.get("zabbix_event_id") or "").strip())
+    # Убираем из текста служебные вставки: JSON-теги Zabbix и голые URL —
+    # ссылки ниже добавляются отдельными кликабельными строками.
+    msg_clean = re.sub(r'\[\{"tag".*?\}\]', '', msg, flags=re.S)
+    msg_clean = re.sub(r'https?://\S+', '', msg_clean)
+    msg_clean = re.sub(r'\s*\|\s*(\|\s*)+', ' | ', msg_clean).strip(' |')
+    # Поля, которые не показываем в таблице (дублируют ссылки/JSON выше).
+    skip_fields = {"zabbix_tags_json", "zabbix_url", "tl_report", "runbook",
+                   "zabbix_runbook", "zabbix_trigger_url", "ioc", "ioc_type"}
     rows = "".join(f"<tr><td style='color:#888'>{esc(k)}</td><td>{esc(v)}</td></tr>"
-                   for k, v in list(f.items())[:15])
+                   for k, v in list(f.items())[:25]
+                   if k not in skip_fields and len(str(v)) <= 300)
     links, seen_urls = [], set()
 
     def add_link(url, label):
@@ -201,22 +210,23 @@ def compose_ticket(event):
             links.append(f"<a href='{esc(url)}'>{label}</a>")
 
     add_link(f"{HOMEWIKI}/rules/{event.get('event_definition_id')}",
-             "ð Разбор в HomeWiki")
+             "📖 Разбор в HomeWiki")
     if is_zabbix:
-        add_link(f.get("zabbix_url"), "ð¨ Событие Zabbix")
-        add_link(graylog_replay_url(event), "ð Replay Search в Graylog")
-        add_link(zabbix_runbook(f), "ð Рунбук в HomeWiki")
+        add_link(f.get("zabbix_url"), "🚨 Событие Zabbix")
+        add_link(graylog_replay_url(event), "🔎 Replay Search в Graylog")
+        add_link(zabbix_runbook(f), "📖 Рунбук в HomeWiki")
     ioc, itype = f.get("ioc"), f.get("ioc_type")
     if ioc and itype in ("ip", "domain"):
-        links.append(f"<a href='{BLOCKBOARD}/?block={esc(ioc)}&reason=Graylog'>ð¡ Заблокировать {esc(ioc)}</a>")
-    add_link(f.get("tl_report"), "ð Отчёт TrafficLens")
-    content = (f"<b>{esc(msg)}</b><br>Время: {esc(event.get('timestamp'))}<br>"
+        links.append(f"<a href='{BLOCKBOARD}/?block={esc(ioc)}&reason=Graylog'>🛡 Заблокировать {esc(ioc)}</a>")
+    add_link(f.get("tl_report"), "📊 Отчёт TrafficLens")
+    links_html = "<br>".join(links)
+    content = (f"<b>{esc(msg_clean)}</b><br>Время: {esc(event.get('timestamp'))}<br>"
                f"Приоритет: {esc(event.get('priority'))}<br><br>"
-               f"<table>{rows}</table><br>" + " · ".join(links))
+               f"<table>{rows}</table><br>{links_html}")
     prio = int(event.get("priority") or 2)
     if is_zabbix:
         trigger = str(f.get("zabbix_trigger_name") or
-                      f.get("zabbix_trigger_description") or msg).strip()
+                      f.get("zabbix_trigger_description") or msg_clean).strip()
         host = str(f.get("host") or "").strip()
         title = f"[Zabbix] {trigger}" + (f" — {host}" if host else "")
     else:
