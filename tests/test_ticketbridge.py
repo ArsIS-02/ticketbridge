@@ -226,6 +226,8 @@ class _FakeIrisResponse:
 
 def test_send_iris_supports_v2_and_v3_endpoints(monkeypatch):
     requests = []
+    # Изолируем проверку endpoint'ов от дополнительного GET статуса при корреляции.
+    monkeypatch.setattr(tb, "IRIS_CORR", False)
     monkeypatch.setattr(tb, "IRIS", "https://iris.test")
     monkeypatch.setattr(tb, "IRIS_KEY", "secret")
     monkeypatch.setattr(tb.urllib.request, "urlopen",

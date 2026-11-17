@@ -83,7 +83,8 @@ def canary_definition(notification_id: str) -> dict:
                 "expr": ">=", "left": {"expr": "number-ref", "ref": "count-"},
                 "right": {"expr": "number", "value": 1.0},
             }},
-            "search_within_ms": 120000, "execute_every_ms": 60000,
+            # Non-overlapping windows prevent one GELF message from firing twice.
+            "search_within_ms": 60000, "execute_every_ms": 60000,
             "use_cron_scheduling": False, "cron_expression": None,
             "cron_timezone": None, "event_limit": 10,
         },

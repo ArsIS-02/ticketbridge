@@ -22,6 +22,7 @@ def test_definition_is_low_and_only_uses_ticketbridge():
     assert definition["priority"] == 1
     assert definition["config"]["query"] == "soc_canary:true"
     assert definition["config"]["group_by"] == ["soc_canary_id"]
+    assert definition["config"]["search_within_ms"] == definition["config"]["execute_every_ms"]
     assert definition["notifications"] == [
         {"notification_id": "notification-1", "notification_parameters": None}]
     assert "mitre_tactic" not in definition["field_spec"]

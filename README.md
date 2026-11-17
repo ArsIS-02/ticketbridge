@@ -28,7 +28,7 @@ Graylog (HTTP notification) --POST /hook?key=...--> TicketBridge --REST--> GLPI 
 ## Установка (сервер)
 
 ```bash
-mkdir -p ~/ticketbridge && cp app.py ~/ticketbridge/
+mkdir -p ~/ticketbridge && cp app.py iris_evidence_pack.py ~/ticketbridge/
 cp ticketbridge.env ~/ticketbridge/   # заполнить токены GLPI
 cp systemd/ticketbridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
@@ -113,6 +113,37 @@ TB_HOSTDECK_TTL=300          # кеш инвентаря, секунд
 Сопоставление типов активов задано в `app.py` (`_asset_type_for`) и легко
 правится под свой инвентарь.
 
+### Корреляция и скоринг IRIS
+
+Повторное событие той же связки «правило Graylog + главный актив» в пределах `TB_SCORE_WINDOW`
+не создаёт новый алерт, а обогащает открытый. Веса по умолчанию: High 50, Medium 20, Low 5;
+MITRE-техника удваивает вес. При скоре `TB_SCORE_THRESHOLD` (по умолчанию 100) алерт эскалируется
+в кейс IRIS. Точечные веса задаются JSON-картой `TB_RULE_WEIGHTS` по `event_definition_id` или
+префиксу названия правила. `TB_IRIS_CORR=0` возвращает прежнее поведение без корреляции IRIS.
+
+### Автоматический пакет доказательств
+
+После успешной эскалации `iris_evidence_pack.py` формирует ZIP и загружает его в штатную папку
+**Evidences** кейса через Datastore API. В пакет входят карточка кейса, связанные алерты, комментарии,
+активы и IOC, временная шкала, заметки, история обогащений, исходные события Graylog и контекст
+главного хоста за replay-окно. `manifest.json` содержит размер и SHA-256 каждого файла; после
+загрузки внешний SHA-256 ZIP сверяется с данными IRIS.
+
+```ini
+TB_EVIDENCE_PACK=1          # 0 отключает только пакет, не эскалацию
+TB_EVIDENCE_RAW_LIMIT=200   # лимит каждого Graylog-поиска
+```
+
+Ошибка пакета пишется в Graylog как `tb_event=iris_evidence_pack_error`, но не откатывает кейс.
+Пакет является снимком на момент формирования. Для существующего кейса после загрузки переменных
+из `ticketbridge.env` доступен ручной запуск:
+
+```bash
+python3 ~/ticketbridge/iris_evidence_pack.py CASE_ID --alert-id ALERT_ID
+```
+
+Проверки: `python3 -m pytest -q tests/test_evidence_pack.py tests/test_asset_typing.py`.
+
 ## Подготовка GLPI
 
 1. Настройка → Общие → API: включить REST API.
@@ -178,7 +209,9 @@ python3 tools/sync_zabbix_graylog_fields.py --apply  # backup, update, verify
 GLPI-заявка и письмо Graylog для этого Low-правила не создаются. IRIS инициирует штатное
 `alert_created`. Overlay `deploy/iris/alerts.py` подавляет только `alert_assigned` при
 автозакрытии собственного canary, поэтому на один прогон приходится одно письмо — о создании.
-Успешное выполнение email-задачи worker'ом не доказывает доставку письма в ящик.
+В Graylog `search_within_ms` равен `execute_every_ms` (60000 мс): неперекрывающиеся окна не дают
+одному GELF-сообщению создать повторное событие и второй алерт. Успешное выполнение email-задачи
+worker'ом не доказывает доставку письма в ящик.
 
 Настройка правила (сначала обязательный dry-run):
 

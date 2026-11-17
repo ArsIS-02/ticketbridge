@@ -23,7 +23,15 @@ ENV:
                     алертов IRIS активами; пустой токен отключает обогащение
   TB_HOSTDECK_TOKEN — токен экспорта HostDeck (HOSTDECK_EXPORT_TOKEN)
   TB_HOSTDECK_TTL — кеш инвентаря HostDeck в секундах (300)
+  TB_IRIS_CORR    — корреляция алертов IRIS (1/0, по умолчанию 1):
+                    повторные срабатывания того же правила по тому же активу
+                    обогащают открытый алерт комментарием, а не плодят новые
+  TB_SCORE_WINDOW — окно корреляции и скоринга в секундах (86400)
+  TB_SCORE_THRESHOLD — порог скора для автоэскалации алерта в кейс (100)
+  TB_SCORE_HIGH/MEDIUM/LOW — вес срабатывания по приоритету Graylog (50/20/5)
+  TB_SCORE_MITRE_MULT — множитель веса для правил с MITRE-техникой (2)
 """
+import base64
 import csv
 import gzip
 import html
@@ -40,7 +48,10 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
+import iris_evidence_pack
+
 PORT = int(os.environ.get("TB_PORT", "8099"))
+EVIDENCE_PACK = os.environ.get("TB_EVIDENCE_PACK", "1").lower() not in ("0", "false", "no")
 KEY = os.environ.get("TB_KEY", "dev-key")
 GLPI = os.environ.get("TB_GLPI_URL", "http://192.168.1.149/glpi").rstrip("/")
 APP_TOKEN = os.environ.get("TB_GLPI_APP_TOKEN", "")
@@ -74,6 +85,40 @@ ZABBIX_HOMEWIKI = os.environ.get(
 IRIS_API_PATH = os.environ.get("TB_IRIS_API_PATH", "/alerts/add")
 if not IRIS_API_PATH.startswith("/") or IRIS_API_PATH.startswith("//"):
     raise ValueError("TB_IRIS_API_PATH must be an absolute path on the IRIS host")
+
+# --- Корреляция и скоринг алертов IRIS (по практикам SOAR Security Vision) ---
+IRIS_CORR = os.environ.get("TB_IRIS_CORR", "1").lower() not in ("0", "false", "no")
+SCORE_WINDOW = int(os.environ.get("TB_SCORE_WINDOW", "86400"))
+SCORE_THRESHOLD = float(os.environ.get("TB_SCORE_THRESHOLD", "100"))
+SCORE_BY_PRIORITY = {
+    3: float(os.environ.get("TB_SCORE_HIGH", "50")),
+    2: float(os.environ.get("TB_SCORE_MEDIUM", "20")),
+    1: float(os.environ.get("TB_SCORE_LOW", "5")),
+}
+SCORE_MITRE_MULT = float(os.environ.get("TB_SCORE_MITRE_MULT", "2"))
+IRIS_OPEN_STATUSES = {1, 2, 3, 4, 5, 8}   # всё, кроме Closed(6) и Merged(7)
+_MITRE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
+
+
+def _load_rule_weights():
+    """Точечные веса правил из TB_RULE_WEIGHTS (JSON-объект).
+
+    Ключ — точный event_definition_id ИЛИ префикс заголовка правила
+    («CANARY - », «HEALTH - Тишина» …); значение — вес срабатывания,
+    заменяющий вес по приоритету. При ошибке парсинга — пустая карта,
+    скоринг продолжает работать по приоритетам.
+    """
+    raw = os.environ.get("TB_RULE_WEIGHTS", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return {str(k): float(v) for k, v in data.items()}
+    except (ValueError, TypeError, AttributeError):
+        return {}
+
+
+RULE_WEIGHTS = _load_rule_weights()
 
 
 class GlpiError(Exception):
@@ -248,8 +293,10 @@ IRIS_LOCK = threading.Lock()
 # --- Обогащение алертов IRIS активами из HostDeck --------------------------
 # ID типов активов IRIS (таблица assets_type)
 ASSET_TYPE_ACCOUNT = 1
+ASSET_TYPE_AD_ACCOUNT = 18  # Windows Account - AD
 ASSET_TYPE_LINUX_SERVER = 3
 ASSET_TYPE_LINUX_COMPUTER = 4
+ASSET_TYPE_LINUX_ACCOUNT = 5
 ASSET_TYPE_MAC = 6
 ASSET_TYPE_WINDOWS = 9
 ASSET_TYPE_WINDOWS_DC = 11
@@ -261,6 +308,7 @@ HOSTDECK = os.environ.get("TB_HOSTDECK_URL", "http://127.0.0.1:8080").rstrip("/"
 HOSTDECK_TOKEN = os.environ.get("TB_HOSTDECK_TOKEN", "")
 HOSTDECK_TTL = int(os.environ.get("TB_HOSTDECK_TTL", "300"))
 
+GL_TOKEN = os.environ.get("TB_GRAYLOG_TOKEN", "")
 _HD_CACHE = {"ts": 0.0, "by_ip": {}, "by_name": {}}
 HD_LOCK = threading.Lock()
 _IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
@@ -271,6 +319,16 @@ _ASSET_IP_KEYS = {"srcip", "dstip", "source_ip", "agent_ip", "gl2_remote_ip",
 _ASSET_HOST_KEYS = {"source", "host", "hostname", "node", "device", "agent_name"}
 _ASSET_USER_KEYS = {"user", "username", "acct", "account", "suser",
                     "winlog_event_data_targetusername"}
+_USER_BAD_SUFFIX = (".service", ".timer", ".socket", ".mount", ".target",
+                    ".scope")
+_USER_BAD_NAMES = {"unknown", "system", "local", "network"}
+
+
+def _is_valid_user(u):
+    """Отсев мусора в учётках: systemd-юниты, числовые uid, системные имена."""
+    ul = u.strip().lower()
+    return (bool(ul) and not ul.endswith(_USER_BAD_SUFFIX)
+            and not ul.isdigit() and ul not in _USER_BAD_NAMES)
 
 
 def hostdeck_lookup():
@@ -320,8 +378,32 @@ def _asset_type_for(info):
     if "win" in os_ or "windows" in name or name.startswith(("w10", "w11")):
         return ASSET_TYPE_WINDOWS
     if os_.startswith("linux"):
-        return ASSET_TYPE_LINUX_COMPUTER if profile == "laptop" else ASSET_TYPE_LINUX_SERVER
+        workstation = profile in {"laptop", "workstation", "desktop"} or "workstation" in name
+        return ASSET_TYPE_LINUX_COMPUTER if workstation else ASSET_TYPE_LINUX_SERVER
     return ASSET_TYPE_LINUX_SERVER if profile == "server" else ASSET_TYPE_LINUX_COMPUTER
+
+
+def _graylog_sample(event, limit=5):
+    """До 5 исходных сообщений события через replay_info (legacy absolute search)."""
+    ri = event.get("replay_info") or {}
+    q, frm, to = ri.get("query"), ri.get("timerange_start"), ri.get("timerange_end")
+    if not (GL_TOKEN and q and frm and to):
+        return []
+    params = {"query": q, "from": frm, "to": to, "limit": str(limit),
+              "fields": "source,gl2_remote_ip,srcip,dstip,user,acct,username,agent_name"}
+    streams = ri.get("streams") or []
+    if streams:
+        params["filter"] = "streams:" + ",".join(streams)
+    url = GRAYLOG + "/api/search/universal/absolute?" + urllib.parse.urlencode(params)
+    auth = base64.b64encode((GL_TOKEN + ":token").encode()).decode()
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Basic " + auth, "X-Requested-By": "ticketbridge"})
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=CTX) as r:
+            text = r.read().decode("utf-8", "replace")
+        return list(csv.DictReader(io.StringIO(text)))
+    except Exception:
+        return []
 
 
 def collect_observables(event):
@@ -348,13 +430,35 @@ def collect_observables(event):
                 names.add(val.lower())
         elif kl in _ASSET_USER_KEYS:
             val = v.strip()
-            if re.match(r"^[A-Za-z0-9_.@\\-]{2,64}$", val) and not _IP_RE.match(val):
+            if (re.match(r"^[A-Za-z0-9_.@\\-]{2,64}$", val)
+                    and not _IP_RE.match(val) and _is_valid_user(val)):
                 users.add(val)
     src = str(event.get("source") or "").strip()
     if _IP_RE.match(src):
         ips.add(src)
     elif re.match(r"^[A-Za-z0-9_.-]{2,64}$", src):
         names.add(src.lower())
+
+    # Текстовый разбор: события Graylog несут IP/имена/учётки внутри текста
+    # (fields.event, message), а не в структурированных полях.
+    _GENERIC = {"server", "user", "host", "node"}
+    text = " ".join(str(t) for t in
+                    (f.get("event"), event.get("message"), event.get("key")) if t)
+    if text:
+        tl = text.lower()
+        ips.update(x for x in _IP_FIND_RE.findall(text)
+                   if not x.startswith(("0.", "255.", "127.")))
+        for nm in by_name:
+            if len(nm) < 5 or nm in _GENERIC:
+                continue
+            if re.search(r"(?<![\w.-])" + re.escape(nm) + r"(?![\w.-])", tl):
+                names.add(nm)
+        for m in re.finditer(
+                r'(?:acct|user|username|login|account)[=:]"?([A-Za-z0-9_.@\\-]{2,32})"?',
+                text, re.I):
+            u = m.group(1)
+            if _is_valid_user(u):
+                users.add(u)
 
     assets, iocs = [], []
 
@@ -382,8 +486,42 @@ def collect_observables(event):
         info = by_name.get(nm)
         if info:
             add_asset(info["name"], _asset_type_for(info), info=info)
+    if not assets and not iocs:
+        for row in _graylog_sample(event):
+            srcm = (row.get("source") or "").strip()
+            if srcm.lower() in by_name:
+                info = by_name[srcm.lower()]
+                add_asset(info["name"], _asset_type_for(info), info=info)
+            elif _IP_RE.match(srcm):
+                info = by_ip.get(srcm.lower())
+                if info:
+                    add_asset(info["name"], _asset_type_for(info), srcm, info=info)
+                else:
+                    ips.add(srcm)
+            for k in ("gl2_remote_ip", "srcip", "dstip"):
+                v = (row.get(k) or "").strip()
+                if _IP_RE.match(v) and not v.startswith(("0.", "127.")):
+                    ips.add(v)
+            for k in ("user", "acct", "username"):
+                v = (row.get(k) or "").strip()
+                if re.match(r"^[A-Za-z0-9_.@\\-]{2,64}$", v) and not _IP_RE.match(v) \
+                        and _is_valid_user(v):
+                    users.add(v)
+        for ip in sorted(ips):
+            if any(a.get("asset_ip") == ip for a in assets):
+                continue
+            info = by_ip.get(ip.lower())
+            if info:
+                add_asset(info["name"], _asset_type_for(info), ip, info=info)
+            else:
+                iocs.append({"ioc_value": ip, "ioc_type_id": IOC_TYPE_IP_ANY})
     for user in sorted(users):
-        add_asset(user, ASSET_TYPE_ACCOUNT, desc="Учётная запись из события Graylog")
+        if "\\" in user or user.endswith("$"):
+            add_asset(user, ASSET_TYPE_AD_ACCOUNT, desc="Доменная учётная запись AD")
+        elif user.strip().lower() in {"root", "redos", "user", "ansible"}:
+            add_asset(user, ASSET_TYPE_LINUX_ACCOUNT, desc="Linux-учётная запись из события Graylog")
+        else:
+            add_asset(user, ASSET_TYPE_ACCOUNT, desc="Учётная запись из события Graylog")
     return assets[:10], iocs[:10]
 
 
@@ -410,12 +548,236 @@ def _post_iris(payload):
         return False, str(e)[:200]
 
 
+def _iris_request(method, path, payload=None):
+    """HTTP-запрос к IRIS API v2; возвращает (ok, данные/текст ошибки)."""
+    try:
+        req = urllib.request.Request(
+            IRIS + path, method=method,
+            data=json.dumps(payload, ensure_ascii=False).encode()
+            if payload is not None else None,
+            headers={"Authorization": "Bearer " + IRIS_KEY,
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
+            body = json.loads(r.read().decode() or b"{}")
+        return True, body.get("data", body)
+    except Exception as e:
+        return False, str(e)[:200]
+
+
+def _iris_alert_status(alert_id):
+    """status_id алерта IRIS или None (ошибка API / алерт удалён)."""
+    ok, data = _iris_request("GET", f"/api/v2/alerts/{alert_id}")
+    if not ok or not isinstance(data, dict):
+        return None
+    try:
+        return int(data.get("alert_status_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _iris_add_comment(alert_id, text):
+    """Комментарий в таймлайн алерта IRIS."""
+    return _iris_request("POST", f"/api/v2/alerts/{alert_id}/comments",
+                         {"comment_text": text})
+
+
+def _iris_escalate(alert_id, case_title, note,
+                   tags="graylog,ticketbridge,correlation"):
+    """Эскалация алерта в кейс IRIS; возвращает (case_id или None, инфо)."""
+    ok, data = _iris_request("POST", f"/api/v2/alerts/escalate/{alert_id}", {
+        "case_title": case_title[:250], "note": note, "case_tags": tags,
+        "import_as_event": True})
+    if ok and isinstance(data, dict) and data.get("case_id") is not None:
+        return data["case_id"], ""
+    return None, str(data)[:200]
+
+
+def rule_weight(event):
+    """Вес срабатывания: точечный из TB_RULE_WEIGHTS (точный id правила или
+    самый длинный префикс заголовка), иначе база по приоритету Graylog;
+    множитель ×N за MITRE-технику применяется в любом случае."""
+    try:
+        prio = int(event.get("priority") or 2)
+    except (TypeError, ValueError):
+        prio = 2
+    w = SCORE_BY_PRIORITY.get(prio, SCORE_BY_PRIORITY[2])
+    if RULE_WEIGHTS:
+        rule_id = str(event.get("event_definition_id") or "")
+        title = str(event.get("event_definition_title") or "")
+        if rule_id in RULE_WEIGHTS:
+            w = RULE_WEIGHTS[rule_id]
+        elif title:
+            best = ""
+            for prefix, weight in RULE_WEIGHTS.items():
+                if len(prefix) > len(best) and title.startswith(prefix):
+                    best, w = prefix, weight
+    f = event.get("fields") or {}
+    hay = " ".join(str(x) for x in (event.get("message"), event.get("key"),
+                                    f.get("event"), f.get("tags"),
+                                    f.get("mitre"), f.get("mitre_technique"))
+                   if x)
+    if _MITRE_RE.search(hay):
+        w *= SCORE_MITRE_MULT
+    return w
+
+
+def iris_corr_key(event, assets):
+    """Ключ корреляции: правило Graylog + главный актив.
+
+    Главный актив — первый не-учётный актив (хост, сеть, ПО); если активов
+    нет или все — учётки, берётся первая учётка; иначе хост-источник события.
+    """
+    rule = str(event.get("event_definition_id")
+               or event.get("event_definition_title") or "unknown-rule")
+    asset = ""
+    for a in assets:
+        if a.get("asset_type_id") not in (ASSET_TYPE_ACCOUNT, ASSET_TYPE_AD_ACCOUNT):
+            asset = a["asset_name"]
+            break
+    if not asset and assets:
+        asset = assets[0]["asset_name"]
+    if not asset:
+        asset = corr_key(event)
+    return f"{rule}|{asset.strip().lower()}"
+
+
+def _iris_enrich(alert_id, event, hits, score, weight, assets, iocs):
+    """Комментарий-обогащение в таймлайн существующего алерта."""
+    lines = [f"🔁 Повторное срабатывание №{hits}: "
+             f"{event.get('message') or 'событие Graylog'}",
+             f"- Время: {event.get('timestamp') or 'не указано'}",
+             f"- Скор: +{weight:g} → **{score:g}** "
+             f"(порог эскалации {SCORE_THRESHOLD:g})"]
+    new_assets = [a["asset_name"] for a in assets]
+    new_iocs = [i["ioc_value"] for i in iocs]
+    if new_assets:
+        lines.append("- Активы: " + ", ".join(new_assets[:10]))
+    if new_iocs:
+        lines.append("- IoC: " + ", ".join(new_iocs[:10]))
+    url = http_url(graylog_replay_url(event))
+    if url:
+        lines.append(f"- [Replay Search в Graylog]({url})")
+    ok, err = _iris_add_comment(alert_id, "\n".join(lines))
+    if not ok:
+        send_gelf(f"TicketBridge: не удалось обогатить IRIS алерт "
+                  f"#{alert_id}: {err}", tool="ticketbridge",
+                  tb_event="iris_enrich_error", iris_alert_id=alert_id)
+
+
+def _escalate_correlated(alert_id, event, key, score, hits):
+    """Эскалация алерта в кейс IRIS при достижении порога скора."""
+    asset = key.split("|", 1)[1] if "|" in key else key
+    rule = str(event.get("event_definition_title") or key.split("|", 1)[0])
+    note = (f"Автоэскалация TicketBridge: скор **{score:g}** ≥ "
+            f"{SCORE_THRESHOLD:g} за {SCORE_WINDOW // 3600} ч "
+            f"({hits} срабатываний правила по активу `{asset}`).")
+    case_id, err = _iris_escalate(alert_id, f"[Корреляция] {rule} — {asset}",
+                                  note)
+    if case_id:
+        if EVIDENCE_PACK:
+            try:
+                pack = iris_evidence_pack.build_and_attach(
+                    case_id=case_id, alert_id=alert_id, iris_url=IRIS,
+                    iris_key=IRIS_KEY, graylog_url=GRAYLOG, graylog_token=GL_TOKEN,
+                    trigger_event=event, score=score, hits=hits)
+                send_gelf(f"TicketBridge: пакет доказательств кейса #{case_id} "
+                          f"приложен как {pack['filename']}", tool="ticketbridge",
+                          tb_event="iris_evidence_pack", iris_alert_id=alert_id,
+                          case_id=case_id, file_id=pack["file_id"],
+                          evidence_id=pack["evidence_id"])
+            except Exception as pack_error:
+                # Кейс уже создан: ошибка необязательного пакета не откатывает эскалацию.
+                send_gelf(f"TicketBridge: кейс #{case_id} создан, но пакет "
+                          f"доказательств не приложен: {pack_error}",
+                          tool="ticketbridge", tb_event="iris_evidence_pack_error",
+                          iris_alert_id=alert_id, case_id=case_id)
+        send_gelf(f"TicketBridge: IRIS алерт #{alert_id} эскалирован "
+                  f"в кейс #{case_id} ({key}, скор {score:g})",
+                  tool="ticketbridge", tb_event="iris_escalated",
+                  iris_alert_id=alert_id, case_id=case_id, corr=key,
+                  score=score)
+    else:
+        send_gelf(f"TicketBridge: ОШИБКА эскалации IRIS алерта "
+                  f"#{alert_id}: {err}", tool="ticketbridge",
+                  tb_event="iris_escalate_error", iris_alert_id=alert_id)
+    return case_id
+
+
+def _correlated_send(event, payload, assets, iocs):
+    """Дедупликация + скоринг алертов IRIS (по практикам SOAR Security Vision).
+
+    Повторное срабатывание того же правила по тому же активу в пределах окна
+    TB_SCORE_WINDOW не создаёт новый алерт, а обогащает открытый: комментарий
+    в таймлайн + накопление скора. При скоре ≥ TB_SCORE_THRESHOLD алерт
+    автоматически эскалируется в кейс. Возвращает (ok, alert_id/ошибка).
+    """
+    key = iris_corr_key(event, assets)
+    now = time.time()
+    weight = rule_weight(event)
+    with IRIS_LOCK:
+        con = state_db()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT alert_id, score, hit_count, last_ts, escalated,"
+                " case_id FROM iris_corr WHERE corr_key=?", (key,)).fetchone()
+            if row and now - row[3] <= SCORE_WINDOW:
+                alert_id, score, hits = row[0], row[1], row[2]
+                escalated, case_id = row[4], row[5]
+                status = _iris_alert_status(alert_id)
+                if status in IRIS_OPEN_STATUSES:
+                    hits += 1
+                    score += weight
+                    _iris_enrich(alert_id, event, hits, score, weight,
+                                 assets, iocs)
+                    if not escalated and score >= SCORE_THRESHOLD:
+                        new_case = _escalate_correlated(alert_id, event, key,
+                                                        score, hits)
+                        if new_case:
+                            escalated, case_id = 1, new_case
+                    con.execute(
+                        "UPDATE iris_corr SET score=?, hit_count=?, last_ts=?,"
+                        " escalated=?, case_id=? WHERE corr_key=?",
+                        (score, hits, now, escalated, case_id, key))
+                    con.commit()
+                    send_gelf(
+                        f"TicketBridge: IRIS алерт #{alert_id} обогащён "
+                        f"({key}: {hits} сраб., скор {score:g})",
+                        tool="ticketbridge", tb_event="iris_enriched",
+                        iris_alert_id=alert_id, corr=key, score=score,
+                        hit_count=hits)
+                    return True, str(alert_id)
+                # Алерт закрыт/слит в IRIS — запись устарела, ниже создаём
+                # новый алерт и заменяем запись (INSERT OR REPLACE).
+            ok, info = _post_iris(payload)
+            if ok and info:
+                escalated, case_id = 0, None
+                if weight >= SCORE_THRESHOLD:
+                    case_id = _escalate_correlated(int(info), event, key,
+                                                   weight, 1)
+                    escalated = 1 if case_id else 0
+                con.execute(
+                    "INSERT OR REPLACE INTO iris_corr"
+                    " (corr_key, alert_id, score, hit_count, first_ts,"
+                    "  last_ts, escalated, case_id) VALUES(?,?,?,1,?,?,?,?)",
+                    (key, int(info), weight, now, now, escalated, case_id))
+            con.commit()
+            return ok, info
+        except Exception as e:
+            con.rollback()
+            return False, str(e)[:200]
+        finally:
+            con.close()
+
+
 def send_iris(event):
     """Дублирует алерт Graylog в DFIR-IRIS через настроенный API endpoint.
 
     IRIS v2 использует /alerts/add, IRIS v3 — /api/v2/alerts.
     Для Zabbix один event ID навсегда соответствует одному алерту IRIS;
     соответствие хранится в SQLite и переживает перезапуск TicketBridge.
+    Прочие события при TB_IRIS_CORR=1 проходят корреляцию: повторы правила
+    по тому же активу обогащают открытый алерт (_correlated_send).
     Не влияет на основной поток: при ошибке только предупреждение в GELF.
     Возвращает (ok, info).
     """
@@ -451,7 +813,9 @@ def send_iris(event):
     if iocs:
         payload["alert_iocs"] = iocs
     if not zabbix_event_id:
-        return _post_iris(payload)
+        if not IRIS_CORR:
+            return _post_iris(payload)
+        return _correlated_send(event, payload, assets, iocs)
 
     # IRIS v3 в этой установке игнорирует alert_source_ref при фильтрации
     # списка, поэтому используем постоянное локальное соответствие и блокировку.
@@ -584,6 +948,11 @@ def state_db():
         first_ts REAL, last_ts REAL, cnt INTEGER, last_msg TEXT)""")
     con.execute("""CREATE TABLE IF NOT EXISTS iris_dedup(
         dedup_key TEXT PRIMARY KEY, alert_id INTEGER NOT NULL, created_ts REAL NOT NULL)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS iris_corr(
+        corr_key TEXT PRIMARY KEY, alert_id INTEGER NOT NULL,
+        score REAL NOT NULL DEFAULT 0, hit_count INTEGER NOT NULL DEFAULT 1,
+        first_ts REAL, last_ts REAL,
+        escalated INTEGER NOT NULL DEFAULT 0, case_id INTEGER)""")
     return con
 
 
@@ -635,6 +1004,10 @@ def sweeper():
             con = state_db()
             stale = [r[0] for r in con.execute(
                 "SELECT corr_key FROM incidents WHERE last_ts < ?", (now - CLOSE_AFTER,))]
+            # чистка устаревших записей корреляции IRIS (старше двух окон)
+            con.execute("DELETE FROM iris_corr WHERE last_ts < ?",
+                        (now - 2 * SCORE_WINDOW,))
+            con.commit()
             con.close()
             for key in stale:
                 tid = close_incident(
@@ -767,8 +1140,28 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "ticket_id": tid})
 
     def do_GET(self):
-        if urlparse(self.path).path == "/health":
+        p = urlparse(self.path)
+        if p.path == "/health":
             return self._json({"ok": True, "glpi": GLPI})
+        if p.path == "/correlation/status":
+            if parse_qs(p.query).get("key", [""])[0] != KEY:
+                return self._json({"error": "bad key"}, 403)
+            con = state_db()
+            rows = con.execute(
+                "SELECT corr_key, alert_id, score, hit_count, first_ts,"
+                " last_ts, escalated, case_id FROM iris_corr"
+                " ORDER BY last_ts DESC LIMIT 100").fetchall()
+            con.close()
+            return self._json({"window_sec": SCORE_WINDOW,
+                               "threshold": SCORE_THRESHOLD,
+                               "custom_weights": len(RULE_WEIGHTS),
+                               "weights": {str(k): v for k, v in
+                                           SCORE_BY_PRIORITY.items()},
+                               "rows": [
+                    {"corr_key": r[0], "alert_id": r[1], "score": r[2],
+                     "hit_count": r[3], "first_ts": r[4], "last_ts": r[5],
+                     "escalated": bool(r[6]), "case_id": r[7]}
+                    for r in rows]})
         self._json({"error": "not found"}, 404)
 
     def _json(self, obj, code=200):
