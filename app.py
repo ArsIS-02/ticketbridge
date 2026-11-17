@@ -45,6 +45,7 @@ import ssl
 import threading
 import time
 import urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
@@ -96,6 +97,9 @@ SCORE_BY_PRIORITY = {
     1: float(os.environ.get("TB_SCORE_LOW", "5")),
 }
 SCORE_MITRE_MULT = float(os.environ.get("TB_SCORE_MITRE_MULT", "2"))
+CASE_SUPPRESSION = int(os.environ.get("TB_CASE_SUPPRESSION", "86400"))
+CASE_REOPEN_MIN_WEIGHT = float(os.environ.get("TB_CASE_REOPEN_MIN_WEIGHT", "50"))
+CASE_EVIDENCE_INTERVAL = int(os.environ.get("TB_CASE_EVIDENCE_INTERVAL", "3600"))
 IRIS_OPEN_STATUSES = {1, 2, 3, 4, 5, 8}   # всё, кроме Closed(6) и Merged(7)
 _MITRE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
 
@@ -664,6 +668,87 @@ def _iris_enrich(alert_id, event, hits, score, weight, assets, iocs):
                   tb_event="iris_enrich_error", iris_alert_id=alert_id)
 
 
+def _iris_case_state(case_id):
+    """Состояние кейса: open/closed; None означает ошибку или неизвестный ответ."""
+    ok, data = _iris_request("GET", f"/api/v2/cases/{case_id}")
+    if not ok or not isinstance(data, dict):
+        return None
+    state = data.get("state") if isinstance(data.get("state"), dict) else {}
+    name = str(data.get("state_name") or state.get("state_name") or "").strip().lower()
+    if name == "closed" or data.get("close_date"):
+        return "closed"
+    if name or data.get("state_id") is not None or state.get("state_id") is not None:
+        return "open"
+    return None
+
+
+def _case_event_date(event):
+    """Дата события Graylog в формате IRIS EventSchema, всегда в UTC."""
+    raw = str(event.get("timestamp") or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        parsed = datetime.now(timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+def _iris_add_case_event(case_id, event, hits, score, weight, assets, iocs,
+                         reopened=False):
+    """Событие в default timeline кейса; активы/IOC и replay сохраняются в тексте."""
+    prefix = "Кейс переоткрыт по весомому срабатыванию" if reopened else f"Срабатывание №{hits}"
+    lines = [f"{prefix}: {event.get('message') or 'событие Graylog'}",
+             f"Время: {event.get('timestamp') or 'не указано'}; "
+             f"вес +{weight:g}; скор {score:g}"]
+    if assets:
+        lines.append("Активы: " + ", ".join(a["asset_name"] for a in assets[:10]))
+    if iocs:
+        lines.append("IoC: " + ", ".join(i["ioc_value"] for i in iocs[:10]))
+    replay = http_url(graylog_replay_url(event))
+    if replay:
+        lines.append("Graylog Replay Search: " + replay)
+    payload = {
+        "event_title": "\n".join(lines),
+        "event_category_id": 1,
+        "event_date": _case_event_date(event),
+        "event_tz": "+00:00",
+        "event_assets": [],
+        "event_iocs": [],
+        "event_source": "Graylog / TicketBridge",
+        "event_tags": "graylog,ticketbridge,correlation",
+    }
+    ok, info = _iris_request("POST", f"/api/v2/cases/{case_id}/events", payload)
+    if not ok:
+        send_gelf(f"TicketBridge: не удалось добавить событие кейса #{case_id}: {info}",
+                  tool="ticketbridge", tb_event="iris_case_event_error",
+                  case_id=case_id)
+    return ok
+
+
+def _attach_case_evidence(case_id, alert_id, event, score, hits):
+    """Best-effort снимок доказательств; ошибка не отменяет жизненный цикл кейса."""
+    if not EVIDENCE_PACK:
+        return False
+    try:
+        pack = iris_evidence_pack.build_and_attach(
+            case_id=case_id, alert_id=alert_id, iris_url=IRIS,
+            iris_key=IRIS_KEY, graylog_url=GRAYLOG, graylog_token=GL_TOKEN,
+            trigger_event=event, score=score, hits=hits)
+        send_gelf(f"TicketBridge: пакет доказательств кейса #{case_id} "
+                  f"приложен как {pack['filename']}", tool="ticketbridge",
+                  tb_event="iris_evidence_pack", iris_alert_id=alert_id,
+                  case_id=case_id, file_id=pack["file_id"],
+                  evidence_id=pack["evidence_id"])
+        return True
+    except Exception as pack_error:
+        send_gelf(f"TicketBridge: пакет доказательств кейса #{case_id} "
+                  f"не приложен: {pack_error}", tool="ticketbridge",
+                  tb_event="iris_evidence_pack_error",
+                  iris_alert_id=alert_id, case_id=case_id)
+        return False
+
+
 def _escalate_correlated(alert_id, event, key, score, hits):
     """Эскалация алерта в кейс IRIS при достижении порога скора."""
     asset = key.split("|", 1)[1] if "|" in key else key
@@ -674,23 +759,7 @@ def _escalate_correlated(alert_id, event, key, score, hits):
     case_id, err = _iris_escalate(alert_id, f"[Корреляция] {rule} — {asset}",
                                   note)
     if case_id:
-        if EVIDENCE_PACK:
-            try:
-                pack = iris_evidence_pack.build_and_attach(
-                    case_id=case_id, alert_id=alert_id, iris_url=IRIS,
-                    iris_key=IRIS_KEY, graylog_url=GRAYLOG, graylog_token=GL_TOKEN,
-                    trigger_event=event, score=score, hits=hits)
-                send_gelf(f"TicketBridge: пакет доказательств кейса #{case_id} "
-                          f"приложен как {pack['filename']}", tool="ticketbridge",
-                          tb_event="iris_evidence_pack", iris_alert_id=alert_id,
-                          case_id=case_id, file_id=pack["file_id"],
-                          evidence_id=pack["evidence_id"])
-            except Exception as pack_error:
-                # Кейс уже создан: ошибка необязательного пакета не откатывает эскалацию.
-                send_gelf(f"TicketBridge: кейс #{case_id} создан, но пакет "
-                          f"доказательств не приложен: {pack_error}",
-                          tool="ticketbridge", tb_event="iris_evidence_pack_error",
-                          iris_alert_id=alert_id, case_id=case_id)
+        _attach_case_evidence(case_id, alert_id, event, score, hits)
         send_gelf(f"TicketBridge: IRIS алерт #{alert_id} эскалирован "
                   f"в кейс #{case_id} ({key}, скор {score:g})",
                   tool="ticketbridge", tb_event="iris_escalated",
@@ -703,13 +772,21 @@ def _escalate_correlated(alert_id, event, key, score, hits):
     return case_id
 
 
-def _correlated_send(event, payload, assets, iocs):
-    """Дедупликация + скоринг алертов IRIS (по практикам SOAR Security Vision).
+def _update_corr_case(con, key, score, hits, now, escalated, case_id,
+                      case_closed_ts, last_evidence_ts):
+    con.execute(
+        "UPDATE iris_corr SET score=?, hit_count=?, last_ts=?, escalated=?,"
+        " case_id=?, case_closed_ts=?, last_evidence_ts=? WHERE corr_key=?",
+        (score, hits, now, escalated, case_id, case_closed_ts,
+         last_evidence_ts, key))
 
-    Повторное срабатывание того же правила по тому же активу в пределах окна
-    TB_SCORE_WINDOW не создаёт новый алерт, а обогащает открытый: комментарий
-    в таймлайн + накопление скора. При скоре ≥ TB_SCORE_THRESHOLD алерт
-    автоматически эскалируется в кейс. Возвращает (ok, alert_id/ошибка).
+
+def _correlated_send(event, payload, assets, iocs):
+    """Один жизненный цикл на связку «правило + актив».
+
+    Открытый кейс получает события и свежие доказательства вместо новых алертов.
+    После закрытия повторы подавляются на TB_CASE_SUPPRESSION; весомое событие
+    может переоткрыть кейс. При неизвестном состоянии кейса дубль не создаётся.
     """
     key = iris_corr_key(event, assets)
     now = time.time()
@@ -719,13 +796,107 @@ def _correlated_send(event, payload, assets, iocs):
         try:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
-                "SELECT alert_id, score, hit_count, last_ts, escalated,"
-                " case_id FROM iris_corr WHERE corr_key=?", (key,)).fetchone()
-            if row and now - row[3] <= SCORE_WINDOW:
-                alert_id, score, hits = row[0], row[1], row[2]
-                escalated, case_id = row[4], row[5]
+                "SELECT alert_id, score, hit_count, last_ts, escalated, case_id,"
+                " case_closed_ts, last_evidence_ts FROM iris_corr WHERE corr_key=?",
+                (key,)).fetchone()
+            if row and (now - row[3] <= SCORE_WINDOW or (row[4] and row[5])):
+                (alert_id, score, hits, _, escalated, case_id,
+                 case_closed_ts, last_evidence_ts) = row
                 status = _iris_alert_status(alert_id)
-                if status in IRIS_OPEN_STATUSES:
+
+                if escalated and case_id:
+                    case_state = _iris_case_state(case_id)
+                    if case_state == "open":
+                        hits += 1
+                        score += weight
+                        if status in IRIS_OPEN_STATUSES:
+                            _iris_enrich(alert_id, event, hits, score, weight,
+                                         assets, iocs)
+                        _iris_add_case_event(case_id, event, hits, score, weight,
+                                             assets, iocs)
+                        if (EVIDENCE_PACK and
+                                (last_evidence_ts is None or
+                                 now - last_evidence_ts >= CASE_EVIDENCE_INTERVAL)):
+                            _attach_case_evidence(case_id, alert_id, event, score, hits)
+                            # Ошибку тоже throttle'им: следующая попытка через интервал.
+                            last_evidence_ts = now
+                        _update_corr_case(con, key, score, hits, now, 1, case_id,
+                                          None, last_evidence_ts)
+                        con.commit()
+                        send_gelf(
+                            f"TicketBridge: IRIS кейс #{case_id} обогащён "
+                            f"({key}: {hits} сраб., скор {score:g})",
+                            tool="ticketbridge", tb_event="iris_case_enriched",
+                            iris_alert_id=alert_id, case_id=case_id, corr=key,
+                            score=score, hit_count=hits)
+                        return True, str(alert_id)
+
+                    if case_state == "closed":
+                        case_closed_ts = case_closed_ts or now
+                        if now - case_closed_ts <= CASE_SUPPRESSION:
+                            if weight < CASE_REOPEN_MIN_WEIGHT:
+                                con.execute(
+                                    "UPDATE iris_corr SET case_closed_ts=?, last_ts=?"
+                                    " WHERE corr_key=?", (case_closed_ts, now, key))
+                                con.commit()
+                                send_gelf(
+                                    f"TicketBridge: повтор по закрытому кейсу #{case_id} "
+                                    f"подавлен ({key}, вес {weight:g})",
+                                    tool="ticketbridge", tb_event="iris_case_suppressed",
+                                    iris_alert_id=alert_id, case_id=case_id, corr=key,
+                                    weight=weight)
+                                return True, str(alert_id)
+                            reopened, info = _iris_request(
+                                "POST", f"/api/v2/cases/{case_id}/reopen", {})
+                            if not reopened:
+                                con.execute(
+                                    "UPDATE iris_corr SET case_closed_ts=?, last_ts=?"
+                                    " WHERE corr_key=?", (case_closed_ts, now, key))
+                                con.commit()
+                                send_gelf(
+                                    f"TicketBridge: не удалось переоткрыть кейс "
+                                    f"#{case_id}: {info}", tool="ticketbridge",
+                                    tb_event="iris_case_reopen_error", case_id=case_id,
+                                    iris_alert_id=alert_id, corr=key)
+                                return False, f"case {case_id} reopen failed: {info}"
+                            hits += 1
+                            score += weight
+                            if status in IRIS_OPEN_STATUSES:
+                                _iris_enrich(alert_id, event, hits, score, weight,
+                                             assets, iocs)
+                            _iris_add_case_event(case_id, event, hits, score, weight,
+                                                 assets, iocs, reopened=True)
+                            _attach_case_evidence(case_id, alert_id, event, score, hits)
+                            last_evidence_ts = now
+                            _update_corr_case(con, key, score, hits, now, 1, case_id,
+                                              None, last_evidence_ts)
+                            con.commit()
+                            send_gelf(
+                                f"TicketBridge: IRIS кейс #{case_id} переоткрыт "
+                                f"по срабатыванию весом {weight:g}",
+                                tool="ticketbridge", tb_event="iris_case_reopened",
+                                iris_alert_id=alert_id, case_id=case_id, corr=key,
+                                score=score, hit_count=hits, weight=weight)
+                            return True, str(alert_id)
+                        # Подавление истекло: ниже начинается новый жизненный цикл.
+                    else:
+                        # API не подтвердило состояние: сохраняем case_id и не плодим дубли.
+                        send_gelf(f"TicketBridge: состояние кейса #{case_id} неизвестно",
+                                  tool="ticketbridge", tb_event="iris_case_state_error",
+                                  iris_alert_id=alert_id, case_id=case_id, corr=key)
+                        if status in IRIS_OPEN_STATUSES:
+                            hits += 1
+                            score += weight
+                            _iris_enrich(alert_id, event, hits, score, weight,
+                                         assets, iocs)
+                            _update_corr_case(con, key, score, hits, now, escalated,
+                                              case_id, case_closed_ts, last_evidence_ts)
+                            con.commit()
+                            return True, str(alert_id)
+                        con.rollback()
+                        return False, f"case {case_id} state unavailable"
+
+                if status in IRIS_OPEN_STATUSES and not (escalated and case_id):
                     hits += 1
                     score += weight
                     _iris_enrich(alert_id, event, hits, score, weight,
@@ -735,10 +906,10 @@ def _correlated_send(event, payload, assets, iocs):
                                                         score, hits)
                         if new_case:
                             escalated, case_id = 1, new_case
-                    con.execute(
-                        "UPDATE iris_corr SET score=?, hit_count=?, last_ts=?,"
-                        " escalated=?, case_id=? WHERE corr_key=?",
-                        (score, hits, now, escalated, case_id, key))
+                            case_closed_ts = None
+                            last_evidence_ts = now
+                    _update_corr_case(con, key, score, hits, now, escalated, case_id,
+                                      case_closed_ts, last_evidence_ts)
                     con.commit()
                     send_gelf(
                         f"TicketBridge: IRIS алерт #{alert_id} обогащён "
@@ -747,20 +918,23 @@ def _correlated_send(event, payload, assets, iocs):
                         iris_alert_id=alert_id, corr=key, score=score,
                         hit_count=hits)
                     return True, str(alert_id)
-                # Алерт закрыт/слит в IRIS — запись устарела, ниже создаём
-                # новый алерт и заменяем запись (INSERT OR REPLACE).
+                # Закрытый алерт без активного кейса — новый жизненный цикл.
+
             ok, info = _post_iris(payload)
             if ok and info:
-                escalated, case_id = 0, None
+                escalated, case_id, last_evidence_ts = 0, None, None
                 if weight >= SCORE_THRESHOLD:
                     case_id = _escalate_correlated(int(info), event, key,
                                                    weight, 1)
                     escalated = 1 if case_id else 0
+                    last_evidence_ts = now if case_id else None
                 con.execute(
                     "INSERT OR REPLACE INTO iris_corr"
-                    " (corr_key, alert_id, score, hit_count, first_ts,"
-                    "  last_ts, escalated, case_id) VALUES(?,?,?,1,?,?,?,?)",
-                    (key, int(info), weight, now, now, escalated, case_id))
+                    " (corr_key, alert_id, score, hit_count, first_ts, last_ts,"
+                    "  escalated, case_id, case_closed_ts, last_evidence_ts)"
+                    " VALUES(?,?,?,1,?,?,?,?,?,?)",
+                    (key, int(info), weight, now, now, escalated, case_id,
+                     None, last_evidence_ts))
             con.commit()
             return ok, info
         except Exception as e:
@@ -952,7 +1126,12 @@ def state_db():
         corr_key TEXT PRIMARY KEY, alert_id INTEGER NOT NULL,
         score REAL NOT NULL DEFAULT 0, hit_count INTEGER NOT NULL DEFAULT 1,
         first_ts REAL, last_ts REAL,
-        escalated INTEGER NOT NULL DEFAULT 0, case_id INTEGER)""")
+        escalated INTEGER NOT NULL DEFAULT 0, case_id INTEGER,
+        case_closed_ts REAL, last_evidence_ts REAL)""")
+    columns = {row[1] for row in con.execute("PRAGMA table_info(iris_corr)")}
+    for column in ("case_closed_ts", "last_evidence_ts"):
+        if column not in columns:
+            con.execute(f"ALTER TABLE iris_corr ADD COLUMN {column} REAL")
     return con
 
 
@@ -1004,9 +1183,12 @@ def sweeper():
             con = state_db()
             stale = [r[0] for r in con.execute(
                 "SELECT corr_key FROM incidents WHERE last_ts < ?", (now - CLOSE_AFTER,))]
-            # чистка устаревших записей корреляции IRIS (старше двух окон)
-            con.execute("DELETE FROM iris_corr WHERE last_ts < ?",
-                        (now - 2 * SCORE_WINDOW,))
+            # Активные кейсы и период подавления закрытых не удаляем.
+            con.execute(
+                "DELETE FROM iris_corr WHERE"
+                " ((case_id IS NULL OR escalated=0) AND last_ts < ?)"
+                " OR (case_closed_ts IS NOT NULL AND case_closed_ts < ?)",
+                (now - 2 * SCORE_WINDOW, now - CASE_SUPPRESSION))
             con.commit()
             con.close()
             for key in stale:
@@ -1148,19 +1330,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "bad key"}, 403)
             con = state_db()
             rows = con.execute(
-                "SELECT corr_key, alert_id, score, hit_count, first_ts,"
-                " last_ts, escalated, case_id FROM iris_corr"
+                "SELECT corr_key, alert_id, score, hit_count, first_ts, last_ts,"
+                " escalated, case_id, case_closed_ts, last_evidence_ts FROM iris_corr"
                 " ORDER BY last_ts DESC LIMIT 100").fetchall()
             con.close()
             return self._json({"window_sec": SCORE_WINDOW,
                                "threshold": SCORE_THRESHOLD,
+                               "case_suppression_sec": CASE_SUPPRESSION,
+                               "case_reopen_min_weight": CASE_REOPEN_MIN_WEIGHT,
+                               "case_evidence_interval_sec": CASE_EVIDENCE_INTERVAL,
                                "custom_weights": len(RULE_WEIGHTS),
                                "weights": {str(k): v for k, v in
                                            SCORE_BY_PRIORITY.items()},
                                "rows": [
                     {"corr_key": r[0], "alert_id": r[1], "score": r[2],
                      "hit_count": r[3], "first_ts": r[4], "last_ts": r[5],
-                     "escalated": bool(r[6]), "case_id": r[7]}
+                     "escalated": bool(r[6]), "case_id": r[7],
+                     "case_closed_ts": r[8], "last_evidence_ts": r[9]}
                     for r in rows]})
         self._json({"error": "not found"}, 404)
 
