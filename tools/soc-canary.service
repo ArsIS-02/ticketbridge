@@ -1,0 +1,11 @@
+[Unit]
+Description=End-to-end SOC canary for Graylog, TicketBridge and IRIS
+After=network-online.target ticketbridge.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/ticketbridge/ticketbridge.env
+EnvironmentFile=%h/zabbix-suite/watchdog.env
+EnvironmentFile=-%h/zabbix-suite/canary.env
+ExecStart=/usr/bin/python3 %h/zabbix-suite/soc_canary.py run
+TimeoutStartSec=15min

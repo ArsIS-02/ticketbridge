@@ -169,6 +169,36 @@ python3 tools/sync_zabbix_graylog_fields.py --apply  # backup, update, verify
 `~/zabbix-suite/watchdog.env`. Подробная схема и руководство:
 `https://homewiki.apps.monitoring.test/rules/art-zabbix-graylog-iris`.
 
+### Сквозной SOC canary
+
+`tools/soc_canary.py` ежедневно проверяет путь **GELF → Graylog → TicketBridge → IRIS**.
+Каждый прогон получает уникальный `soc_canary_id`; инструмент последовательно находит исходное
+сообщение, событие выделенного Low-правила и только свой алерт IRIS. После успеха алерт
+закрывается как `Closed` с разрешением `Legitimate` и получает технический комментарий.
+GLPI-заявка и письмо Graylog для этого Low-правила не создаются. IRIS инициирует штатное
+`alert_created`; при автозакрытии также может быть отправлено уведомление об изменении статуса.
+Успешное выполнение email-задачи worker'ом не доказывает доставку письма в ящик.
+
+Настройка правила (сначала обязательный dry-run):
+
+```bash
+python3 tools/soc_canary.py setup
+python3 tools/soc_canary.py setup --apply
+systemctl --user start soc-canary.service
+systemctl --user enable --now soc-canary.timer
+```
+
+Расписание — ежедневно в **09:13** локального времени сервера, `Persistent=true`. Состояние и
+история сохраняются с правами `0600` в `~/zabbix-suite/canary-state.json` и
+`~/zabbix-suite/canary-history/`. Метрики `soc.canary.heartbeat`, `soc.canary.status` и
+`soc.canary.latency` отправляются в Zabbix. Один триггер сообщает о failed-прогоне или
+heartbeat старше 26 часов; после восстановления он закрывается штатно. Если trapper недоступен,
+используется существующий authenticated GELF fallback с постоянным event ID.
+
+Перед изменением self-monitoring сохраните аудит и выполните
+`python3 tools/zabbix_suite.py setup-selfmonitor`. Автономные проверки:
+`python3 -m pytest -q tests/test_soc_canary.py`.
+
 ## Graylog
 
 System → Alerts → Notifications → HTTP Notification:

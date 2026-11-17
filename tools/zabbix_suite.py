@@ -397,10 +397,13 @@ def setup_selfmonitor(z: Zabbix, env_path: Path):
     specs = [("soc.watchdog.heartbeat", "SOC watchdog heartbeat", 3)]
     specs += [(f"soc.watchdog[{name}]", f"SOC watchdog: {name} health", 3)
               for name in ("zabbix", "graylog", "iris", "ticketbridge")]
+    specs += [("soc.canary.heartbeat", "SOC canary heartbeat", 3),
+              ("soc.canary.status", "SOC canary: last end-to-end result", 3),
+              ("soc.canary.latency", "SOC canary: end-to-end latency", 0)]
     for key, name, value_type in specs:
         data = {"hostid": host["hostid"], "name": name, "key_": key, "type": 2,
                 "value_type": value_type, "history": "7d", "trends": "0",
-                "description": "Independent SOC watchdog; managed by zabbix_suite.py"}
+                "description": "Independent SOC watchdog/canary; managed by zabbix_suite.py"}
         found = z.call("item.get", {"output": ["itemid"], "hostids": [host["hostid"]],
                                     "filter": {"key_": key}})
         if found:
@@ -417,13 +420,17 @@ def setup_selfmonitor(z: Zabbix, env_path: Path):
                        f"last(/{WATCHDOG_HOST}/soc.watchdog[{name}])=0",
                        4 if name != "ticketbridge" else 3, name)
                       for name in ("zabbix", "graylog", "iris", "ticketbridge")]
+    trigger_specs += [("SOC canary failed or heartbeat is stale",
+                       f"last(/{WATCHDOG_HOST}/soc.canary.status)=0 or "
+                       f"now()-last(/{WATCHDOG_HOST}/soc.canary.heartbeat)>93600",
+                       4, "canary")]
     for description, expression, priority, component in trigger_specs:
         tags = [{"tag": "integration", "value": "graylog"},
                 {"tag": "scope", "value": "selfmonitor"},
                 {"tag": "component", "value": component},
                 {"tag": "runbook", "value": HOMEWIKI}]
         data = {"description": description, "expression": expression, "priority": priority,
-                "status": 0, "comments": "Independent health signal from soc_watchdog.py.",
+                "status": 0, "comments": "Independent health signal from soc_watchdog.py/soc_canary.py.",
                 "tags": tags}
         found = z.call("trigger.get", {"output": ["triggerid"], "hostids": [host["hostid"]],
                                        "filter": {"description": description}})

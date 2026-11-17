@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the SOC end-to-end canary every day at 09:13
+
+[Timer]
+OnCalendar=*-*-* 09:13:00
+Persistent=true
+Unit=soc-canary.service
+
+[Install]
+WantedBy=timers.target
