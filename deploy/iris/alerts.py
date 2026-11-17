@@ -81,6 +81,13 @@ def _resolve_caller():
     return _flask_current_user
 
 
+def _is_closed_soc_canary(alert) -> bool:
+    title = str(getattr(alert, 'alert_title', '') or '')
+    return (int(getattr(alert, 'alert_status_id', 0) or 0) == 6
+            and title.startswith('HEALTH - SOC canary:')
+            and 'soc-canary-' in title)
+
+
 def alerts_search(start_date, end_date, source_start_date, source_end_date, title, description,
                   status, severity, owner, source, tags, case_identifier, customer_identifier, classification, alert_identifiers,
                   assets, iocs, resolution_status, source_reference, custom_conditions, user_identifier_filter, page, per_page, sort,
@@ -530,8 +537,10 @@ def alerts_update(alert: Alert, updated_alert: Alert, activity_data) -> Alert:
 
     # The stock listener deliberately suppresses self-assignment notices.
     # Notify only when ownership actually changes to the current caller.
+    # Automated canary closure must not emit a second email after creation.
     new_owner_id = getattr(updated_alert, 'alert_owner_id', None)
-    if new_owner_id and new_owner_id != alert.alert_owner_id:
+    if (new_owner_id and new_owner_id != alert.alert_owner_id
+            and not _is_closed_soc_canary(updated_alert)):
         try:
             if int(_resolve_caller().id) == int(new_owner_id):
                 from app.iris_engine.notifications.service import notify
