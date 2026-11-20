@@ -88,6 +88,28 @@ def _is_closed_soc_canary(alert) -> bool:
             and 'soc-canary-' in title)
 
 
+def _maintenance_email_suppressed(alert) -> bool:
+    """Only TicketBridge availability alerts with an active HostDeck window.
+
+    The in-app notification remains enabled. Requiring both the source field and
+    the tags prevents a generic user-supplied `maintenance` tag from muting mail.
+    """
+    content = getattr(alert, 'alert_source_content', None)
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(content, dict):
+        return False
+    fields = content.get('fields') or {}
+    if not isinstance(fields, dict):
+        return False
+    active = str(fields.get('maintenance_active') or '').lower() == 'true'
+    tags = str(getattr(alert, 'alert_tags', '') or '').lower()
+    return active and 'maintenance' in tags and 'hostdeck' in tags
+
+
 def alerts_search(start_date, end_date, source_start_date, source_end_date, title, description,
                   status, severity, owner, source, tags, case_identifier, customer_identifier, classification, alert_identifiers,
                   assets, iocs, resolution_status, source_reference, custom_conditions, user_identifier_filter, page, per_page, sort,
@@ -204,6 +226,7 @@ def alerts_create(alert: Alert, iocs: list[Ioc], assets: list[CaseAssets]) -> Al
     # IRIS has no stock alert_created notification. Notify the API caller
     # about a new unowned alert; an already assigned alert uses the stock
     # alert_assigned notification instead, avoiding a duplicate message.
+    # Active HostDeck maintenance suppresses only email, never the in-app event.
     if not getattr(alert, 'alert_owner_id', None):
         try:
             from app.iris_engine.notifications.service import notify
@@ -215,7 +238,8 @@ def alerts_create(alert: Alert, iocs: list[Ioc], assets: list[CaseAssets]) -> Al
                 link=f'/alerts/{alert.alert_id}',
                 source_type='alert',
                 source_id=alert.alert_id,
-                default_channels={'in_app': True, 'email': True},
+                default_channels={'in_app': True,
+                                  'email': not _maintenance_email_suppressed(alert)},
             )
         except Exception:
             from app.logger import logger
