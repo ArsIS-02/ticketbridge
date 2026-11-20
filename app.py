@@ -125,6 +125,28 @@ def _load_rule_weights():
 RULE_WEIGHTS = _load_rule_weights()
 
 
+def _load_availability_rules():
+    """Явная карта availability definition_id → резервное имя хоста HostDeck.
+
+    Пустое имя означает, что хост берётся из полей события. Заголовки и теги
+    нарочно не используются: совпадение по тексту не должно пометить security.
+    Ошибка конфигурации безопасно отключает только maintenance-обогащение.
+    """
+    raw = os.environ.get("TB_AVAILABILITY_RULES", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v or "").strip() for k, v in data.items()}
+    except (ValueError, TypeError, AttributeError):
+        return {}
+
+
+AVAILABILITY_RULES = _load_availability_rules()
+
+
 class GlpiError(Exception):
     pass
 
@@ -246,10 +268,18 @@ def compose_ticket(event):
     msg_clean = re.sub(r'\s*\|\s*(\|\s*)+', ' | ', msg_clean).strip(' |')
     # Поля, которые не показываем в таблице (дублируют ссылки/JSON выше).
     skip_fields = {"zabbix_tags_json", "zabbix_url", "tl_report", "runbook",
-                   "zabbix_runbook", "zabbix_trigger_url", "ioc", "ioc_type"}
+                   "zabbix_runbook", "zabbix_trigger_url", "ioc", "ioc_type",
+                   "maintenance_active", "maintenance_until", "maintenance_until_iso",
+                   "maintenance_reason"}
     rows = "".join(f"<tr><td style='color:#888'>{esc(k)}</td><td>{esc(v)}</td></tr>"
                    for k, v in list(f.items())[:25]
                    if k not in skip_fields and len(str(v)) <= 300)
+    maintenance_html = ""
+    if maintenance_is_active(event):
+        until = f.get("maintenance_until_iso") or f.get("maintenance_until") or "не указан"
+        reason = f.get("maintenance_reason") or "Причина не указана"
+        maintenance_html = ("<p><b>🛠 Обслуживание HostDeck</b><br>"
+                            f"Окончание: {esc(until)}<br>Причина: {esc(reason)}</p>")
     links, seen_urls = [], set()
 
     def add_link(url, label):
@@ -270,7 +300,7 @@ def compose_ticket(event):
     add_link(f.get("tl_report"), "📊 Отчёт TrafficLens")
     links_html = "<br>".join(links)
     content = (f"<b>{esc(msg_clean)}</b><br>Время: {esc(event.get('timestamp'))}<br>"
-               f"Приоритет: {esc(event.get('priority'))}<br><br>"
+               f"Приоритет: {esc(event.get('priority'))}<br>{maintenance_html}<br>"
                f"<table>{rows}</table><br>{links_html}")
     prio = int(event.get("priority") or 2)
     if is_zabbix:
@@ -313,7 +343,7 @@ HOSTDECK_TOKEN = os.environ.get("TB_HOSTDECK_TOKEN", "")
 HOSTDECK_TTL = int(os.environ.get("TB_HOSTDECK_TTL", "300"))
 
 GL_TOKEN = os.environ.get("TB_GRAYLOG_TOKEN", "")
-_HD_CACHE = {"ts": 0.0, "by_ip": {}, "by_name": {}}
+_HD_CACHE = {"ts": 0.0, "by_ip": {}, "by_name": {}, "stale": False}
 HD_LOCK = threading.Lock()
 _IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 _IP_FIND_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -340,6 +370,7 @@ def hostdeck_lookup():
 
     При любой ошибке возвращает последний кеш (или пустые карты):
     обогащение активами никогда не ломает основной поток Graylog→IRIS.
+    Признак stale запрещает доверять старому maintenance-контексту.
     """
     if not HOSTDECK_TOKEN:
         return _HD_CACHE["by_ip"], _HD_CACHE["by_name"]
@@ -358,14 +389,68 @@ def hostdeck_lookup():
                 for row in csv.reader(io.StringIO(text)):
                     if len(row) < 4 or not row[0].strip():
                         continue
+                    try:
+                        maintenance_until = float(row[9]) if len(row) > 9 and row[9].strip() else 0.0
+                    except ValueError:
+                        maintenance_until = 0.0
                     dest[row[0].strip().lower()] = {
                         "name": row[1].strip(), "os": row[2].strip(),
-                        "profile": row[3].strip()}
-            _HD_CACHE.update(ts=now, by_ip=by_ip, by_name=by_name)
+                        "profile": row[3].strip(),
+                        "maintenance_until": maintenance_until,
+                        "maintenance_reason": row[10].strip() if len(row) > 10 else ""}
+            _HD_CACHE.update(ts=now, by_ip=by_ip, by_name=by_name, stale=False)
         except Exception as e:
+            _HD_CACHE["stale"] = True
             send_gelf(f"TicketBridge: HostDeck недоступен, обогащение по кешу: {e}",
                       tool="ticketbridge", tb_event="hostdeck_error")
         return _HD_CACHE["by_ip"], _HD_CACHE["by_name"]
+
+
+def with_maintenance_context(event, now=None):
+    """Возвращает копию availability-события с активным окном HostDeck.
+
+    Правило должно быть явно перечислено в TB_AVAILABILITY_RULES. Истёкшее окно,
+    неизвестный хост, отключённый токен и ошибка HostDeck оставляют событие как есть.
+    Security-события и исходный словарь никогда не изменяются.
+    """
+    rule_id = str(event.get("event_definition_id") or "")
+    if not HOSTDECK_TOKEN or rule_id not in AVAILABILITY_RULES:
+        return event
+    fields = event.get("fields") or {}
+    host = (AVAILABILITY_RULES[rule_id] or fields.get("host")
+            or fields.get("hr_agent_name") or fields.get("hr_ip")
+            or fields.get("source") or event.get("source") or "")
+    host = str(host).strip().lower()
+    if not host:
+        return event
+    by_ip, by_name = hostdeck_lookup()
+    if _HD_CACHE["stale"]:
+        return event
+    info = by_name.get(host) or by_ip.get(host)
+    if not info:
+        return event
+    now = time.time() if now is None else now
+    try:
+        until = float(info.get("maintenance_until") or 0)
+    except (TypeError, ValueError):
+        return event
+    if until <= now:
+        return event
+    enriched = dict(event)
+    enriched_fields = dict(fields)
+    enriched_fields.update({
+        "maintenance_active": "true",
+        "maintenance_until": str(int(until)),
+        "maintenance_until_iso": datetime.fromtimestamp(until, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "maintenance_reason": str(info.get("maintenance_reason") or "Причина не указана"),
+    })
+    enriched["fields"] = enriched_fields
+    return enriched
+
+
+def maintenance_is_active(event):
+    fields = event.get("fields") or {}
+    return str(fields.get("maintenance_active") or "").lower() == "true"
 
 
 def _asset_type_for(info):
@@ -963,6 +1048,9 @@ def send_iris(event):
                   str(event.get("event_definition_id") or event.get("key") or ""))
     prio = int(event.get("priority") or 2)
     title, description, _ = compose_ticket(event)
+    tags = "graylog,ticketbridge,zabbix" if zabbix_event_id else "graylog,ticketbridge"
+    if maintenance_is_active(event):
+        tags += ",maintenance,hostdeck"
     payload = {
         "alert_title": (title if zabbix_event_id else
                         (event.get("message") or "событие Graylog"))[:250],
@@ -974,7 +1062,7 @@ def send_iris(event):
                               else IRIS_SEVERITY.get(prio, 1)),
         "alert_status_id": 2,   # New
         "alert_source_event_time": event.get("timestamp") or "",
-        "alert_tags": "graylog,ticketbridge,zabbix" if zabbix_event_id else "graylog,ticketbridge",
+        "alert_tags": tags,
         "alert_customer_id": 1,
         "alert_source_content": event,
     }
@@ -1289,6 +1377,16 @@ def handle_event(event):
                       zabbix_event_id=zabbix_event_id, corr=corr_key(event))
         return None
 
+    event = with_maintenance_context(event)
+    if maintenance_is_active(event):
+        fields = event.get("fields") or {}
+        send_gelf("TicketBridge: availability-алерт обогащён окном обслуживания HostDeck",
+                  tool="ticketbridge", tb_event="maintenance_context",
+                  event_id=str(event.get("id") or ""),
+                  event_definition_id=str(event.get("event_definition_id") or ""),
+                  corr=corr_key(event),
+                  maintenance_until=str(fields.get("maintenance_until") or ""),
+                  maintenance_reason=str(fields.get("maintenance_reason") or ""))
     priority = int(event.get("priority") or 2)
     tid = _handle_event(event) if priority == 3 or is_recovery(event) else None
     if not is_recovery(event):

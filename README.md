@@ -113,6 +113,37 @@ TB_HOSTDECK_TTL=300          # кеш инвентаря, секунд
 Сопоставление типов активов задано в `app.py` (`_asset_type_for`) и легко
 правится под свой инвентарь.
 
+### Maintenance-контекст availability из HostDeck
+
+Для явно перечисленных availability-правил TicketBridge добавляет в IRIS блок
+**«Обслуживание HostDeck»** со сроком окончания и причиной, а также теги
+`maintenance,hostdeck`. В `alert_source_content.fields` сохраняются
+`maintenance_active`, `maintenance_until`, `maintenance_until_iso` и
+`maintenance_reason`. Это **контекст, а не подавление**: severity, status, маршрут,
+Graylog/IRIS-уведомления и автоматическое закрытие не меняются. Security-правила
+не обогащаются даже при совпадении hostname.
+
+Разрешённые правила задаются только по `event_definition_id`:
+
+```ini
+# Вымышленный пример, не production-карта лаборатории.
+TB_AVAILABILITY_RULES={"availability-problem-example":"","availability-silence-example":"server-01.example.test"}
+```
+
+Пустое значение означает, что хост берётся из `host`, `hr_agent_name`, `hr_ip`,
+`source` события. Непустое значение — резервный hostname для правил «тишины», у
+которых нет исходного сообщения. Не указывайте один fallback для агрегатов
+нескольких хостов: окно одного актива не должно приписываться всему парку. Для
+`HomeRepo agent_silent` используется именно `hr_agent_name`, а не источник самой панели.
+
+Активность проверяется по Unix UTC: истёкшее или снятое окно не добавляется. Graylog
+обновляет lookup примерно раз в 60 секунд, TicketBridge кеширует инвентарь
+`TB_HOSTDECK_TTL` секунд (по умолчанию 300). При недоступном HostDeck старый
+maintenance-кэш **не используется**, но обычная доставка алертов продолжается;
+это fail-open только для обогащения. Пустой `TB_HOSTDECK_TOKEN` отключает и
+maintenance-контекст. Для Zabbix штатное окно HostDeck по-прежнему синхронизируется
+с Zabbix maintenance отдельно.
+
 ### Корреляция и скоринг IRIS
 
 Повторное событие той же связки «правило Graylog + главный актив» в пределах `TB_SCORE_WINDOW`
@@ -156,7 +187,7 @@ TB_CASE_EVIDENCE_INTERVAL=3600  # минимальный интервал меж
 python3 ~/ticketbridge/iris_evidence_pack.py CASE_ID --alert-id ALERT_ID
 ```
 
-Проверки: `python3 -m pytest -q tests/` (65 тестов, включая жизненный цикл кейса).
+Проверки: `python3 -m pytest -q tests/` (75 тестов, включая жизненный цикл кейса и maintenance-контекст).
 
 ## Подготовка GLPI
 
