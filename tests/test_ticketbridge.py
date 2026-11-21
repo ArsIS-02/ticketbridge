@@ -308,3 +308,57 @@ def test_high_still_creates_glpi_and_iris(tmp_path, monkeypatch):
     event["priority"] = 3
     assert tb.handle_event(event) == 101
     assert len(_FakeGlpi.created) == 1
+
+
+# --- ограничение размера HTTP-вебхука ---------------------------------------
+
+def _post_webhook(payload, limit, monkeypatch, handled):
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setattr(tb, "KEY", "test-key")
+    monkeypatch.setattr(tb, "MAX_BODY_BYTES", limit)
+    monkeypatch.setattr(tb, "handle_event", lambda event: handled.append(event))
+    server = HTTPServer(("127.0.0.1", 0), tb.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    body = json.dumps(payload).encode()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/hook?key=test-key",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, len(body), json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, len(body), json.loads(error.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_webhook_accepts_event_larger_than_old_8kib_limit(monkeypatch):
+    handled = []
+    payload = {"event": {
+        "id": "large-event",
+        "message": "delivery regression",
+        "priority": 1,
+        "fields": {"event": "x" * 9000},
+    }}
+    status, body_size, response = _post_webhook(payload, 16384, monkeypatch, handled)
+    assert body_size > 8192
+    assert status == 200 and response["ok"] is True
+    assert handled == [payload["event"]]
+
+
+def test_webhook_still_rejects_body_above_configured_limit(monkeypatch):
+    handled = []
+    payload = {"event": {"message": "too large", "fields": {"event": "x" * 2048}}}
+    status, body_size, response = _post_webhook(payload, 1024, monkeypatch, handled)
+    assert body_size > 1024
+    assert status == 413 and response == {"error": "request too large"}
+    assert handled == []

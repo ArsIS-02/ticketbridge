@@ -52,6 +52,7 @@ from urllib.parse import urlparse, parse_qs, quote
 import iris_evidence_pack
 
 PORT = int(os.environ.get("TB_PORT", "8099"))
+MAX_BODY_BYTES = int(os.environ.get("TB_MAX_BODY_BYTES", "1048576"))
 EVIDENCE_PACK = os.environ.get("TB_EVIDENCE_PACK", "1").lower() not in ("0", "false", "no")
 KEY = os.environ.get("TB_KEY", "dev-key")
 GLPI = os.environ.get("TB_GLPI_URL", "http://192.168.1.149/glpi").rstrip("/")
@@ -1408,6 +1409,8 @@ class Handler(BaseHTTPRequestHandler):
         if parse_qs(p.query).get("key", [""])[0] != KEY:
             return self._json({"error": "bad key"}, 403)
         n = int(self.headers.get("Content-Length", 0))
+        if n > MAX_BODY_BYTES:
+            return self._json({"error": "request too large"}, 413)
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
