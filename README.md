@@ -28,7 +28,7 @@ Graylog (HTTP notification) --POST /hook?key=...--> TicketBridge --REST--> GLPI 
 ## Установка (сервер)
 
 ```bash
-mkdir -p ~/ticketbridge && cp app.py iris_evidence_pack.py ~/ticketbridge/
+mkdir -p ~/ticketbridge && cp app.py iris_evidence_pack.py velociraptor_evidence.py ~/ticketbridge/
 cp ticketbridge.env ~/ticketbridge/   # заполнить токены GLPI
 cp systemd/ticketbridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now ticketbridge
@@ -197,7 +197,60 @@ TB_CASE_EVIDENCE_INTERVAL=3600  # минимальный интервал меж
 python3 ~/ticketbridge/iris_evidence_pack.py CASE_ID --alert-id ALERT_ID
 ```
 
-Проверки: `python3 -m pytest -q tests/` (79 тестов, включая жизненный цикл кейса, maintenance-контекст и подавление начального email при активном окне).
+### Ручной сбор Velociraptor в Evidence
+
+В меню кейса IRIS пункт **Collect with Velociraptor** открывает модальное окно, а не новую
+вкладку. Оператор выбирает актив кейса; Client ID автоматически читается из
+`custom_attributes.velociraptor.client_id`. Кнопка **Save to asset** отдельно сохраняет
+типизированный атрибут через штатный API IRIS и не запускает сбор. Поле можно изменить только
+для текущей операции. Запуск по-прежнему требует явного подтверждения; `asset_id` выбранного
+актива записывается в `velociraptor/collection.json` внутри Evidence ZIP.
+
+В **Settings → Custom Attributes → Assets** должна существовать вкладка `velociraptor` с полем
+`client_id` (`type: input_string`, `value: ""`, `mandatory: false`). Схему применяют только
+additive-кнопкой **Save**: Partial/Complete overwrite могут удалить данные других атрибутов.
+Без объявления схемы IRIS может вернуть HTTP 200, но не сохранить неизвестное поле, поэтому после
+настройки нужно повторно прочитать актив через API и проверить автозаполнение в диалоге.
+
+Разрешён только `Generic.Client.Info`; произвольный VQL, команды и имена артефактов из HTTP
+не принимаются. После `FINISHED` результат, flow ID, ссылка на поток и SHA-256 сохраняются
+в ZIP и загружаются в Evidence. Для модального окна форма с `response=json` получает JSON-ответ;
+CORS разрешён только origin из `TB_IRIS_URL`. Прежняя защищённая HTML-форма сохранена для
+совместимости.
+
+Переменные `TB_VR_BINARY`, `TB_VR_API_CONFIG`, `TB_VR_GUI_URL`, `TB_VR_CREATOR` и
+`TB_VR_TIMEOUT` приведены в `ticketbridge.env.example`. API-файл должен иметь права `0600`.
+Отдельный пользователь Velociraptor `ticketbridge-collector` имеет роль `administrator`:
+проверенная роль `api` разрешает чтение, но не регистрирует новый сбор. Конфигурация API
+и секретный ключ не входят в репозиторий.
+
+### Локальный dry-run Collection Playbook
+
+`collection_playbooks.py` и `tools/velociraptor_dry_run.py` только строят план по локальным
+JSON-файлам события и клиентов. Они не обращаются к Graylog, IRIS, HostDeck или Velociraptor,
+не вызывают CLI и не создают Flow. Рабочий HTTP-маршрут TicketBridge этот resolver не использует.
+
+```bash
+python3 tools/velociraptor_dry_run.py \
+  --event /secure/input/event.json \
+  --clients /secure/input/clients.json \
+  --output dry-run-plan.json
+```
+
+Файл плана получает права `0600`. Код возврата: `0` для `dry_run`, `2` для fail-closed
+результата. Сейчас реестр содержит только сценарий `linux_process` с артефактами
+`Generic.Client.Info`, `Linux.Sys.Pslist` и `Linux.Network.NetstatEnriched`; все сборы помечены
+`upload=false`, а план всегда содержит `authorized=false`, `requires_confirmation=true` и
+`flow_created=false`.
+
+Цель сопоставляется по hostname/FQDN/короткому имени ровно с одним клиентом. IP из `host`
+разрешается только после подтверждения через переданный инвентарь HostDeck; `src_ip`, `dst_ip`
+и IOC сами по себе целью не становятся. Неизвестное правило, отсутствие или неоднозначность
+клиента и несовпадение ОС запрещают построение сбора. Значения фильтров экранируются как литералы;
+произвольные VQL и параметры не принимаются. Это подготовка к ручному пилоту, а не активированная
+автоматизация.
+
+Проверки: `python3 -m pytest -q tests/` (109 тестов, включая жизненный цикл кейса, maintenance-контекст, подавление начального email, DFIR-сбор, JSON/CORS модального окна и dry-run resolver).
 
 ## Подготовка GLPI
 

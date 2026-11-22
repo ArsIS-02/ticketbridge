@@ -253,10 +253,11 @@ class EvidencePack:
             raise RuntimeError("Datastore folder not found")
         body, content_type = multipart({
             "file_original_name": metadata["filename"],
-            "file_description": (f"Автоматический пакет доказательств TicketBridge; "
-                                 f"SHA-256 {metadata['sha256']}; снимок {metadata['generated_at']}"),
+            "file_description": metadata.get("file_description") or (
+                f"Автоматический пакет доказательств TicketBridge; "
+                f"SHA-256 {metadata['sha256']}; снимок {metadata['generated_at']}"),
             "file_is_evidence": "true",
-            "file_tags": "ticketbridge,evidence-pack,graylog",
+            "file_tags": metadata.get("file_tags", "ticketbridge,evidence-pack,graylog"),
         }, metadata["filename"], content)
         uploaded = self.api("POST", f"/api/v2/cases/{case_id}/datastore/folders/{folder[2:]}/files",
                             payload=body, content_type=content_type)

@@ -50,6 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
 import iris_evidence_pack
+import velociraptor_evidence
 
 PORT = int(os.environ.get("TB_PORT", "8099"))
 MAX_BODY_BYTES = int(os.environ.get("TB_MAX_BODY_BYTES", "1048576"))
@@ -1402,15 +1403,61 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_OPTIONS(self):
+        p = urlparse(self.path)
+        if p.path != "/velociraptor/collect":
+            return self._json({"error": "not found"}, 404)
+        if parse_qs(p.query).get("key", [""])[0] != KEY:
+            return self._json({"error": "bad key"}, 403)
+        self.send_response(204)
+        self._cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self):
         p = urlparse(self.path)
-        if p.path != "/hook":
+        if p.path not in ("/hook", "/velociraptor/collect"):
             return self._json({"error": "not found"}, 404)
         if parse_qs(p.query).get("key", [""])[0] != KEY:
             return self._json({"error": "bad key"}, 403)
         n = int(self.headers.get("Content-Length", 0))
         if n > MAX_BODY_BYTES:
             return self._json({"error": "request too large"}, 413)
+        if p.path == "/velociraptor/collect":
+            as_json = False
+            try:
+                form = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)
+                as_json = form.get("response") == ["json"]
+                case_id = int(form.get("case_id", ["0"])[0])
+                client_id = form.get("client_id", [""])[0].strip()
+                raw_asset_id = form.get("asset_id", [""])[0].strip()
+                asset_id = int(raw_asset_id) if raw_asset_id else None
+                if (case_id <= 0 or (asset_id is not None and asset_id <= 0)
+                        or form.get("confirm") != ["yes"]):
+                    raise ValueError("case_id, valid asset_id and explicit confirmation are required")
+                result = velociraptor_evidence.collect_and_attach(
+                    case_id, client_id, asset_id=asset_id)
+            except (ValueError, TypeError) as error:
+                if as_json:
+                    return self._json({"ok": False, "error": str(error)}, 400)
+                return self._html("Ошибка запроса", f"<p>{esc(error)}</p>", 400)
+            except Exception as error:
+                if as_json:
+                    return self._json({"ok": False, "error": str(error)[:800]}, 502)
+                return self._html("Сбор не выполнен",
+                                  f"<p>{esc(str(error)[:800])}</p>", 502)
+            if as_json:
+                return self._json({"ok": True, **result})
+            body = (f"<p>Сбор завершён, ZIP загружен в Evidence кейса.</p>"
+                    f"<dl><dt>Flow</dt><dd>{esc(result['flow_id'])}</dd>"
+                    f"<dt>Evidence ID</dt><dd>{result['evidence_id']}</dd>"
+                    f"<dt>SHA-256</dt><dd><code>{result['sha256']}</code></dd></dl>"
+                    f"<p><a href='{esc(result['flow_link'])}'>Открыть поток Velociraptor</a> · "
+                    f"<a href='{esc(IRIS)}/case/{case_id}/evidence'>Открыть Evidence кейса</a></p>")
+            return self._html("Результат Velociraptor", body)
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
@@ -1426,6 +1473,27 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path)
         if p.path == "/health":
             return self._json({"ok": True, "glpi": GLPI})
+        if p.path == "/velociraptor/collect":
+            query = parse_qs(p.query)
+            if query.get("key", [""])[0] != KEY:
+                return self._json({"error": "bad key"}, 403)
+            try:
+                case_id = int(query.get("case_id", ["0"])[0])
+                if case_id <= 0:
+                    raise ValueError
+            except ValueError:
+                return self._json({"error": "bad case_id"}, 400)
+            body = (f"<p>Кейс IRIS №{case_id}. Будет запущен только безопасный артефакт "
+                    "<code>Generic.Client.Info</code>; произвольные команды не выполняются.</p>"
+                    f"<form method='post' action='{esc(self.path)}'>"
+                    f"<input type='hidden' name='case_id' value='{case_id}'>"
+                    "<label>Velociraptor Client ID<input name='client_id' required "
+                    "pattern='C\\.[0-9a-f]{16}' placeholder='C.0123456789abcdef'></label>"
+                    "<label class='confirm'><input type='checkbox' name='confirm' value='yes' required> "
+                    "Подтверждаю запуск сбора и загрузку результата в Evidence</label>"
+                    "<button type='submit'>Запустить сбор</button></form>"
+                    "<p class='muted'>Операция может занять несколько минут. Не закрывайте страницу.</p>")
+            return self._html("Сбор Velociraptor → IRIS", body)
         if p.path == "/correlation/status":
             if parse_qs(p.query).get("key", [""])[0] != KEY:
                 return self._json({"error": "bad key"}, 403)
@@ -1451,13 +1519,41 @@ class Handler(BaseHTTPRequestHandler):
                     for r in rows]})
         self._json({"error": "not found"}, 404)
 
+    def _cors_headers(self):
+        origin = self.headers.get("Origin", "").rstrip("/")
+        if IRIS and origin == IRIS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
     def _json(self, obj, code=200):
         data = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self._cors_headers()
         self.end_headers()
         self.wfile.write(data)
+
+    def _html(self, title, body, code=200):
+        page = ("<!doctype html><html lang='ru'><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                f"<title>{esc(title)}</title>"
+                "<style>body{font:16px system-ui;max-width:760px;"
+                "margin:40px auto;padding:0 20px;background:#10141d;color:#e8edf5}"
+                "label{display:block;margin:20px 0}input[name=client_id]{display:block;width:100%;"
+                "padding:12px;margin-top:8px;font:16px monospace}button{padding:12px 18px;"
+                "background:#68a6ff;border:0;border-radius:6px;font-weight:700}a{color:#8bb8ff}"
+                ".confirm input{margin-right:8px}.muted{color:#aab4c5}code{overflow-wrap:anywhere}"
+                "dt{font-weight:700;margin-top:12px}</style>"
+                f"<h1>{esc(title)}</h1>{body}</html>").encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.end_headers()
+        self.wfile.write(page)
 
 
 if __name__ == "__main__":
