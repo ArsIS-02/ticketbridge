@@ -206,6 +206,9 @@ python3 ~/ticketbridge/iris_evidence_pack.py CASE_ID --alert-id ALERT_ID
 для текущей операции. Запуск по-прежнему требует явного подтверждения; `asset_id` выбранного
 актива записывается в `velociraptor/collection.json` внутри Evidence ZIP.
 
+Пошаговый порядок разбора сработки, выбора цели, запуска сбора и проверки Evidence приведён в
+[Runbook «Реагирование на сработки Graylog в IRIS с Velociraptor»](https://homewiki.apps.monitoring.test/rules/art-graylog-iris-velociraptor-alert-response).
+
 В **Settings → Custom Attributes → Assets** должна существовать вкладка `velociraptor` с полем
 `client_id` (`type: input_string`, `value: ""`, `mandatory: false`). Схему применяют только
 additive-кнопкой **Save**: Partial/Complete overwrite могут удалить данные других атрибутов.
