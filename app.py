@@ -51,6 +51,10 @@ from urllib.parse import urlparse, parse_qs, quote
 
 import iris_evidence_pack
 import velociraptor_evidence
+import manual_collection
+import alert_collection
+import auto_triage_hook
+import collection_jobs
 
 PORT = int(os.environ.get("TB_PORT", "8099"))
 MAX_BODY_BYTES = int(os.environ.get("TB_MAX_BODY_BYTES", "1048576"))
@@ -673,11 +677,13 @@ def _iris_add_comment(alert_id, text):
 
 
 def _iris_escalate(alert_id, case_title, note,
-                   tags="graylog,ticketbridge,correlation"):
+                   tags="graylog,ticketbridge,correlation", assets=None):
     """Эскалация алерта в кейс IRIS; возвращает (case_id или None, инфо)."""
-    ok, data = _iris_request("POST", f"/api/v2/alerts/escalate/{alert_id}", {
-        "case_title": case_title[:250], "note": note, "case_tags": tags,
-        "import_as_event": True})
+    payload = {"case_title": case_title[:250], "note": note, "case_tags": tags,
+               "import_as_event": True}
+    if assets is not None:
+        payload["assets_import_list"] = assets
+    ok, data = _iris_request("POST", f"/api/v2/alerts/escalate/{alert_id}", payload)
     if ok and isinstance(data, dict) and data.get("case_id") is not None:
         return data["case_id"], ""
     return None, str(data)[:200]
@@ -1396,7 +1402,63 @@ def handle_event(event):
         send_gelf(f"TicketBridge: IRIS {'алерт #' + info if ok else 'ОШИБКА: ' + info}",
                   tool="ticketbridge", tb_event="iris_alert" if ok else "iris_error",
                   corr=corr_key(event), ticket_id=tid or 0)
+        if ok:
+            # Планировщик вызывается после send_iris и вне IRIS_LOCK. По умолчанию
+            # off: не создаёт поток, БД или сетевые вызовы и не влияет на ответ /hook.
+            auto_triage_hook.maybe_start(event, info, STATE_DB, log=send_gelf)
     return tid
+
+
+_COLLECTION_JOBS = None
+
+
+def _case_collection_job(case_id, asset_id, client_id, platform, artifacts, progress):
+    return manual_collection.collect_many_and_attach(
+        case_id, client_id, platform, artifacts, asset_id=asset_id, progress=progress)
+
+
+def _alert_collection_job(alert_id, asset_id, client_id, platform, artifacts, progress):
+    def collect(case_id, resolved_client_id, resolved_platform, resolved_artifacts, asset_id=None):
+        return manual_collection.collect_many_and_attach(
+            case_id, resolved_client_id, resolved_platform, resolved_artifacts,
+            asset_id=asset_id, progress=progress)
+
+    return alert_collection.collect_from_alert(
+        alert_id, asset_id, client_id, platform, artifacts,
+        iris_request=_iris_request, escalate=_iris_escalate, collect=collect)
+
+
+def _collection_job_notification(job):
+    if job.get("kind") != "alert":
+        return
+    result = job.get("result") or {}
+    lines = [
+        f"### Velociraptor collection `{job['job_id']}`",
+        f"- Status: **{job['status']}**",
+        f"- Incident: {job.get('case_id') or 'not created'}",
+    ]
+    if result.get("evidence_id"):
+        lines.extend([
+            f"- Evidence ID: `{result['evidence_id']}`",
+            f"- File: `{result.get('filename') or 'see incident Evidence'}`",
+            f"- SHA-256: `{result.get('sha256') or 'unknown'}`",
+        ])
+    for flow in result.get("artifacts") or []:
+        lines.append(f"- [{flow.get('artifact')} / {flow.get('flow_id')}]({flow.get('flow_link')})")
+    if job.get("error"):
+        lines.append(f"- Error: {job['error']}")
+    _iris_add_comment(job["target_id"], "\n".join(lines))
+
+
+def _collection_job_manager():
+    global _COLLECTION_JOBS
+    if _COLLECTION_JOBS is None:
+        _COLLECTION_JOBS = collection_jobs.CollectionJobManager(
+            STATE_DB, case_runner=_case_collection_job,
+            alert_runner=_alert_collection_job,
+            notify=_collection_job_notification,
+            max_parallel=int(os.environ.get("TB_VR_MANUAL_MAX_PARALLEL", "2")))
+    return _COLLECTION_JOBS
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1405,13 +1467,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         p = urlparse(self.path)
-        if p.path != "/velociraptor/collect":
+        jobs_path = p.path == "/velociraptor/jobs" or p.path.startswith("/velociraptor/jobs/")
+        if p.path not in ("/velociraptor/collect", "/velociraptor/alert-collect",
+                          "/velociraptor/catalog", "/velociraptor/resolve-client") and not jobs_path:
             return self._json({"error": "not found"}, 404)
         if parse_qs(p.query).get("key", [""])[0] != KEY:
             return self._json({"error": "bad key"}, 403)
         self.send_response(204)
         self._cors_headers()
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        methods = ("GET, OPTIONS" if p.path in
+                   ("/velociraptor/catalog", "/velociraptor/resolve-client") or jobs_path
+                   else "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", methods)
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
         self.send_header("Access-Control-Max-Age", "600")
         self.send_header("Content-Length", "0")
@@ -1419,18 +1486,64 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path)
-        if p.path not in ("/hook", "/velociraptor/collect"):
+        if p.path not in ("/hook", "/velociraptor/collect",
+                          "/velociraptor/alert-collect"):
             return self._json({"error": "not found"}, 404)
         if parse_qs(p.query).get("key", [""])[0] != KEY:
             return self._json({"error": "bad key"}, 403)
         n = int(self.headers.get("Content-Length", 0))
         if n > MAX_BODY_BYTES:
             return self._json({"error": "request too large"}, 413)
+        if p.path == "/velociraptor/alert-collect":
+            try:
+                form = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)
+                allowed_fields = {"alert_id", "asset_id", "client_id", "confirm",
+                                  "response", "platform", "artifacts", "async"}
+                if set(form) - allowed_fields:
+                    raise ValueError("Only reviewed alert collection fields are accepted")
+                alert_id = int(form.get("alert_id", ["0"])[0])
+                asset_id = int(form.get("asset_id", ["0"])[0])
+                client_id = form.get("client_id", [""])[0].strip()
+                platform = form.get("platform", [""])[0]
+                artifacts = form.get("artifacts") or []
+                if form.get("async", ["0"]) not in (["0"], ["1"]):
+                    raise ValueError("Invalid async flag")
+                if (alert_id <= 0 or asset_id <= 0
+                        or form.get("confirm") != ["yes"]):
+                    raise ValueError("alert_id, asset_id and explicit confirmation are required")
+                velociraptor_evidence.VelociraptorCollector.validate_client_id(client_id)
+                manual_collection.validate_selection(platform, artifacts)
+                if form.get("async") == ["1"]:
+                    job, duplicate = _collection_job_manager().start_alert(
+                        alert_id, asset_id, client_id, platform, artifacts)
+                    return self._json({"ok": True, "job": job, "duplicate": duplicate},
+                                      200 if duplicate else 202)
+                result = alert_collection.collect_from_alert(
+                    alert_id, asset_id, client_id, platform, artifacts,
+                    iris_request=_iris_request, escalate=_iris_escalate,
+                    collect=manual_collection.collect_many_and_attach)
+            except collection_jobs.CollectionJobBusy as error:
+                return self._json({"ok": False, "error": str(error)}, 429)
+            except alert_collection.AlertCollectionError as error:
+                payload = {"ok": False, "error": str(error),
+                           "alert_id": error.alert_id}
+                if error.case_id is not None:
+                    payload.update(case_id=error.case_id,
+                                   case_created=error.case_created)
+                return self._json(payload, error.status)
+            except (ValueError, TypeError,
+                    velociraptor_evidence.VelociraptorError) as error:
+                return self._json({"ok": False, "error": str(error)}, 400)
+            except Exception as error:
+                return self._json({"ok": False, "error": str(error)[:800]}, 502)
+            return self._json({"ok": True, **result})
         if p.path == "/velociraptor/collect":
             as_json = False
+            multi = False
             try:
                 form = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)
                 as_json = form.get("response") == ["json"]
+                multi = "artifacts" in form or "platform" in form
                 case_id = int(form.get("case_id", ["0"])[0])
                 client_id = form.get("client_id", [""])[0].strip()
                 raw_asset_id = form.get("asset_id", [""])[0].strip()
@@ -1438,8 +1551,36 @@ class Handler(BaseHTTPRequestHandler):
                 if (case_id <= 0 or (asset_id is not None and asset_id <= 0)
                         or form.get("confirm") != ["yes"]):
                     raise ValueError("case_id, valid asset_id and explicit confirmation are required")
-                result = velociraptor_evidence.collect_and_attach(
-                    case_id, client_id, asset_id=asset_id)
+                if multi:
+                    allowed_fields = {"case_id", "asset_id", "client_id", "confirm",
+                                      "response", "platform", "artifacts", "async"}
+                    if set(form) - allowed_fields or "artifact" in form:
+                        raise ValueError("Only platform and artifacts[] are accepted; VQL and parameters are forbidden")
+                    if form.get("async", ["0"]) not in (["0"], ["1"]):
+                        raise ValueError("Invalid async flag")
+                    platform = form.get("platform", [""])[0]
+                    artifacts = form.get("artifacts") or []
+                    manual_collection.validate_selection(platform, artifacts)
+                    if form.get("async") == ["1"]:
+                        if asset_id is None:
+                            raise ValueError("asset_id is required for background collection")
+                        job, duplicate = _collection_job_manager().start_case(
+                            case_id, asset_id, client_id, platform, artifacts)
+                        return self._json({"ok": True, "job": job, "duplicate": duplicate},
+                                          200 if duplicate else 202)
+                    result = manual_collection.collect_many_and_attach(
+                        case_id, client_id, platform, artifacts, asset_id=asset_id)
+                else:
+                    artifact = form.get(
+                        "artifact", [velociraptor_evidence.DEFAULT_ARTIFACT])[0]
+                    try:
+                        artifact = velociraptor_evidence.validate_artifact(artifact)
+                    except velociraptor_evidence.VelociraptorError as error:
+                        raise ValueError(str(error)) from error
+                    result = velociraptor_evidence.collect_and_attach(
+                        case_id, client_id, asset_id=asset_id, artifact=artifact)
+            except collection_jobs.CollectionJobBusy as error:
+                return self._json({"ok": False, "error": str(error)}, 429)
             except (ValueError, TypeError) as error:
                 if as_json:
                     return self._json({"ok": False, "error": str(error)}, 400)
@@ -1451,12 +1592,25 @@ class Handler(BaseHTTPRequestHandler):
                                   f"<p>{esc(str(error)[:800])}</p>", 502)
             if as_json:
                 return self._json({"ok": True, **result})
-            body = (f"<p>Сбор завершён, ZIP загружен в Evidence кейса.</p>"
-                    f"<dl><dt>Flow</dt><dd>{esc(result['flow_id'])}</dd>"
-                    f"<dt>Evidence ID</dt><dd>{result['evidence_id']}</dd>"
-                    f"<dt>SHA-256</dt><dd><code>{result['sha256']}</code></dd></dl>"
-                    f"<p><a href='{esc(result['flow_link'])}'>Открыть поток Velociraptor</a> · "
-                    f"<a href='{esc(IRIS)}/case/{case_id}/evidence'>Открыть Evidence кейса</a></p>")
+            if multi:
+                flow_items = "".join(
+                    f"<li><a href='{esc(item['flow_link'])}'>{esc(item['artifact'])} — "
+                    f"{esc(item['flow_id'])}</a></li>" for item in result["artifacts"])
+                body = (f"<p>Мультисбор завершён со статусом <b>{esc(result['status'])}</b>; "
+                        "ZIP загружен в Evidence кейса.</p>"
+                        f"<dl><dt>Успешных сборов</dt><dd>{len(result['artifacts'])}</dd>"
+                        f"<dt>Ошибок</dt><dd>{len(result['errors'])}</dd>"
+                        f"<dt>Evidence ID</dt><dd>{result['evidence_id']}</dd>"
+                        f"<dt>SHA-256</dt><dd><code>{result['sha256']}</code></dd></dl>"
+                        f"<ul>{flow_items}</ul>"
+                        f"<p><a href='{esc(IRIS)}/case/{case_id}/evidence'>Открыть Evidence кейса</a></p>")
+            else:
+                body = (f"<p>Сбор завершён, ZIP загружен в Evidence кейса.</p>"
+                        f"<dl><dt>Flow</dt><dd>{esc(result['flow_id'])}</dd>"
+                        f"<dt>Evidence ID</dt><dd>{result['evidence_id']}</dd>"
+                        f"<dt>SHA-256</dt><dd><code>{result['sha256']}</code></dd></dl>"
+                        f"<p><a href='{esc(result['flow_link'])}'>Открыть поток Velociraptor</a> · "
+                        f"<a href='{esc(IRIS)}/case/{case_id}/evidence'>Открыть Evidence кейса</a></p>")
             return self._html("Результат Velociraptor", body)
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -1473,6 +1627,53 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path)
         if p.path == "/health":
             return self._json({"ok": True, "glpi": GLPI})
+        if p.path == "/velociraptor/jobs" or p.path.startswith("/velociraptor/jobs/"):
+            query = parse_qs(p.query)
+            if query.get("key", [""])[0] != KEY:
+                return self._json({"error": "bad key"}, 403)
+            manager = _collection_job_manager()
+            if p.path == "/velociraptor/jobs":
+                if set(query) - {"key", "alert_id", "case_id"}:
+                    return self._json({"ok": False, "error": "Invalid job query"}, 400)
+                selectors = [name for name in ("alert_id", "case_id") if name in query]
+                if len(selectors) != 1:
+                    return self._json({"ok": False, "error": "Specify alert_id or case_id"}, 400)
+                try:
+                    target_id = int(query[selectors[0]][0])
+                    if target_id <= 0:
+                        raise ValueError
+                except (ValueError, TypeError):
+                    return self._json({"ok": False, "error": "Invalid job target"}, 400)
+                kind = "alert" if selectors[0] == "alert_id" else "case"
+                return self._json({"ok": True, "job": manager.store.latest(kind, target_id)})
+            job_id = p.path.removeprefix("/velociraptor/jobs/")
+            if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+                return self._json({"ok": False, "error": "Invalid job_id"}, 400)
+            job = manager.store.get(job_id)
+            if not job:
+                return self._json({"ok": False, "error": "Collection job not found"}, 404)
+            return self._json({"ok": True, "job": job})
+        if p.path == "/velociraptor/resolve-client":
+            query = parse_qs(p.query)
+            if query.get("key", [""])[0] != KEY:
+                return self._json({"error": "bad key"}, 403)
+            try:
+                if set(query) - {"key", "hostname"}:
+                    raise ValueError("Only hostname is accepted")
+                result = manual_collection.resolve_client_by_hostname(
+                    query.get("hostname", [""])[0])
+            except ValueError as error:
+                code = getattr(error, "code", "invalid_hostname")
+                status = {"client_not_found": 404, "client_ambiguous": 409}.get(code, 400)
+                return self._json({"ok": False, "error": str(error), "code": code}, status)
+            except Exception as error:
+                return self._json({"ok": False, "error": str(error)[:800],
+                                   "code": "resolver_error"}, 502)
+            return self._json({"ok": True, **result})
+        if p.path == "/velociraptor/catalog":
+            if parse_qs(p.query).get("key", [""])[0] != KEY:
+                return self._json({"error": "bad key"}, 403)
+            return self._json({"ok": True, **manual_collection.artifact_catalog()})
         if p.path == "/velociraptor/collect":
             query = parse_qs(p.query)
             if query.get("key", [""])[0] != KEY:

@@ -109,6 +109,26 @@ def test_duplicate_short_hostname_is_ambiguous():
     assert len(plan["details"]["client_ids"]) == 2
 
 
+@pytest.mark.parametrize("asset_name,hostname,fqdn", [
+    ("wazuh.homelab.monitoring.test", "wazuh-homelab.monitoring.test",
+     "wazuh-homelab.monitoring.test"),
+    ("MacBookPro", "MacBook-Pro", "MacBook-Pro"),
+])
+def test_normalized_hostname_separators_match_one_client(asset_name, hostname, fqdn):
+    plan = cp.build_dry_run(event(asset_name), [client(hostname=hostname, fqdn=fqdn)],
+                            registry=registry(), now=NOW)
+    assert plan["status"] == "dry_run"
+    assert plan["client"]["client_id"] == "C.0000000000000001"
+
+
+def test_normalized_separator_collision_is_ambiguous():
+    other = client("C.0000000000000002", "server01.other.test", "server01.other.test")
+    plan = cp.build_dry_run(event("server-01"), [client(), other],
+                            registry=registry(), now=NOW)
+    assert plan["status"] == "client_ambiguous"
+    assert len(plan["details"]["client_ids"]) == 2
+
+
 def test_different_candidates_for_two_clients_are_ambiguous():
     item = event("server-01")
     item["source"] = "server-02.example.test"

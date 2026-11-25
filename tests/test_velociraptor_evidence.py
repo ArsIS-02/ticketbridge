@@ -128,3 +128,104 @@ def test_flow_must_be_finished(api_config):
     client = collector(api_config, run)
     with pytest.raises(vr.VelociraptorError, match="did not finish"):
         client.collect(CLIENT)
+
+
+def test_redos_artifact_is_explicitly_allowed_and_recorded(api_config):
+    artifact = "Custom.REDOS.Compliance.CriticalFilePermissions"
+    rows = [{"Path": "/etc/passwd", "Mode": "0644"}]
+    flow = {"session_id": FLOW, "state": "FINISHED", "create_time": 123}
+    queries = []
+
+    def run(command, **kwargs):
+        query = command[-1]
+        queries.append(query)
+        if "clients()" in query:
+            return completed([{"client_id": CLIENT}])
+        if "Artifact.Server.Utils.CollectClient" in query:
+            assert f'ArtifactName={json.dumps(artifact)}' in query
+            assert "Parameters='{}'" in query
+            return completed(rows)
+        return completed([flow])
+
+    client = collector(api_config, run)
+    actual_rows, actual_flow = client.collect(CLIENT, artifact=artifact)
+    assert actual_rows == rows and actual_flow == flow
+    assert json.dumps(artifact) in queries[-1]
+
+    content, metadata, collection = client.build_pack(
+        25, CLIENT, rows, flow, asset_id=42, artifact=artifact)
+    assert collection["artifact"] == artifact
+    assert metadata["file_tags"].endswith(
+        "custom-redos-compliance-criticalfilepermissions")
+    assert artifact in metadata["file_description"]
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        stored = json.loads(archive.read("velociraptor/collection.json"))
+        assert stored["artifact"] == artifact
+        assert artifact in archive.read("README.md").decode()
+
+
+@pytest.mark.parametrize("artifact", [
+    "Custom.Remediation.DeleteFile",
+    "Custom.REDOS.Unknown",
+    "Generic.Client.Info', Parameters='malicious",
+    "",
+])
+def test_unlisted_artifact_is_rejected_before_any_api_call(api_config, artifact):
+    calls = []
+
+    def fail_if_called(*args, **kwargs):
+        calls.append(args)
+        pytest.fail("Velociraptor API must not be called")
+
+    client = collector(api_config, fail_if_called)
+    with pytest.raises(vr.VelociraptorError, match="not allowed"):
+        client.collect(CLIENT, artifact=artifact)
+    with pytest.raises(vr.VelociraptorError, match="not allowed"):
+        vr.collect_and_attach(25, CLIENT, collector=client, artifact=artifact)
+    assert calls == []
+
+
+def test_allowlist_contains_exactly_the_32_reviewed_redos_artifacts():
+    expected_redos = {
+        "Custom.REDOS.Compliance.AIDE",
+        "Custom.REDOS.Compliance.AccountLockout",
+        "Custom.REDOS.Compliance.AuditConfiguration",
+        "Custom.REDOS.Compliance.AuditLogRotation",
+        "Custom.REDOS.Compliance.AuditRules",
+        "Custom.REDOS.Compliance.AuditdConfig",
+        "Custom.REDOS.Compliance.CriticalFilePermissions",
+        "Custom.REDOS.Compliance.CronPermissions",
+        "Custom.REDOS.Compliance.CryptoPolicies",
+        "Custom.REDOS.Compliance.DisableModuleLoading",
+        "Custom.REDOS.Compliance.EmptyPasswords",
+        "Custom.REDOS.Compliance.FIPS",
+        "Custom.REDOS.Compliance.KernelHardening",
+        "Custom.REDOS.Compliance.OpenPorts",
+        "Custom.REDOS.Compliance.OpenSCAP",
+        "Custom.REDOS.Compliance.PasswordHistory",
+        "Custom.REDOS.Compliance.PasswordPolicy",
+        "Custom.REDOS.Compliance.SELinuxModules",
+        "Custom.REDOS.Compliance.SELinuxStatus",
+        "Custom.REDOS.Compliance.SSHHardening",
+        "Custom.REDOS.Compliance.SecurityUpdates",
+        "Custom.REDOS.Compliance.SecurityUpdatesDetailed",
+        "Custom.REDOS.Compliance.SessionTimeout",
+        "Custom.REDOS.Compliance.ShadowPermissions",
+        "Custom.REDOS.Compliance.StickyBit",
+        "Custom.REDOS.Compliance.SuAccess",
+        "Custom.REDOS.Compliance.SuidBinaries",
+        "Custom.REDOS.Compliance.SyslogConfiguration",
+        "Custom.REDOS.Compliance.TimeSync",
+        "Custom.REDOS.Detection.HackingTools",
+        "Custom.REDOS.Detection.SuspiciousBindMounts",
+        "Custom.REDOS.Detection.SuspiciousXattrs",
+    }
+    assert len(expected_redos) == 32
+    assert vr.REDOS_COMPLIANCE_ARTIFACTS | vr.REDOS_DETECTION_ARTIFACTS == expected_redos
+    assert vr.ALLOWED_ARTIFACTS == expected_redos | {vr.DEFAULT_ARTIFACT}
+    assert vr.REDOS_DNF_ARTIFACTS == {
+        "Custom.REDOS.Compliance.SecurityUpdates",
+        "Custom.REDOS.Compliance.SecurityUpdatesDetailed",
+    }
+    assert vr.REDOS_DNF_ARTIFACTS <= vr.ALLOWED_ARTIFACTS
+    assert not any(name.startswith("Custom.Remediation.") for name in vr.ALLOWED_ARTIFACTS)

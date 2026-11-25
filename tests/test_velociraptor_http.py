@@ -39,11 +39,13 @@ def request(url, data=None, method=None, origin=ORIGIN):
     return urllib.request.Request(url, data=data, headers=headers, method=method)
 
 
-def result(case_id, client_id, asset_id=None):
+def result(case_id, client_id, asset_id=None,
+           artifact=tb.velociraptor_evidence.DEFAULT_ARTIFACT):
     return {
         "case_id": case_id,
         "asset_id": asset_id,
         "client_id": client_id,
+        "artifact": artifact,
         "flow_id": "F.TESTFLOW",
         "evidence_id": 17,
         "sha256": "abc123",
@@ -55,8 +57,9 @@ def test_modal_json_collection_includes_asset_and_restricted_cors(server, monkey
     calls = []
     monkeypatch.setattr(
         tb.velociraptor_evidence, "collect_and_attach",
-        lambda case_id, client_id, asset_id=None: (
-            calls.append((case_id, client_id, asset_id)) or result(case_id, client_id, asset_id)))
+        lambda case_id, client_id, asset_id=None, artifact=tb.velociraptor_evidence.DEFAULT_ARTIFACT: (
+            calls.append((case_id, client_id, asset_id, artifact))
+            or result(case_id, client_id, asset_id, artifact)))
     response = request(server, {
         "case_id": "53", "asset_id": "42", "client_id": CLIENT,
         "confirm": "yes", "response": "json",
@@ -68,7 +71,8 @@ def test_modal_json_collection_includes_asset_and_restricted_cors(server, monkey
         assert reply.headers["Cache-Control"] == "no-store"
     assert payload["ok"] is True
     assert payload["asset_id"] == 42
-    assert calls == [(53, CLIENT, 42)]
+    assert payload["artifact"] == tb.velociraptor_evidence.DEFAULT_ARTIFACT
+    assert calls == [(53, CLIENT, 42, tb.velociraptor_evidence.DEFAULT_ARTIFACT)]
 
     with urllib.request.urlopen(request(server, {
         "case_id": "53", "client_id": CLIENT, "confirm": "yes", "response": "json",
@@ -96,3 +100,44 @@ def test_modal_preflight_is_limited_to_collection_route(server):
         assert reply.status == 204
         assert reply.headers["Access-Control-Allow-Origin"] == ORIGIN
         assert reply.headers["Access-Control-Allow-Methods"] == "POST, OPTIONS"
+
+
+def test_modal_passes_selected_redos_artifact(server, monkeypatch):
+    artifact = "Custom.REDOS.Compliance.CriticalFilePermissions"
+    calls = []
+
+    def collect(case_id, client_id, asset_id=None, artifact=None):
+        calls.append((case_id, client_id, asset_id, artifact))
+        return result(case_id, client_id, asset_id, artifact)
+
+    monkeypatch.setattr(tb.velociraptor_evidence, "collect_and_attach", collect)
+    response = request(server, {
+        "case_id": "53", "asset_id": "42", "client_id": CLIENT,
+        "artifact": artifact, "confirm": "yes", "response": "json",
+    })
+    with urllib.request.urlopen(response, timeout=5) as reply:
+        payload = json.loads(reply.read())
+        assert reply.status == 200
+    assert payload["artifact"] == artifact
+    assert calls == [(53, CLIENT, 42, artifact)]
+
+
+@pytest.mark.parametrize("artifact", [
+    "Custom.Remediation.DeleteFile",
+    "Custom.REDOS.Unknown",
+    "Generic.Client.Info', Parameters='malicious",
+])
+def test_modal_rejects_unlisted_artifact_without_collection(server, monkeypatch, artifact):
+    monkeypatch.setattr(
+        tb.velociraptor_evidence, "collect_and_attach",
+        lambda *args, **kwargs: pytest.fail("collection must not run"))
+    response = request(server, {
+        "case_id": "53", "client_id": CLIENT, "artifact": artifact,
+        "confirm": "yes", "response": "json",
+    })
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(response, timeout=5)
+    assert caught.value.code == 400
+    payload = json.loads(caught.value.read())
+    assert payload["ok"] is False
+    assert "not allowed" in payload["error"]

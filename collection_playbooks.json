@@ -2,6 +2,66 @@
   "schema_version": 1,
   "status": "dry_run_only",
   "max_client_age_seconds": 900,
+  "coverage": {
+    "inventory_snapshot": "2026-11-23",
+    "total_rules": 272,
+    "enabled_alert_rules": 261
+  },
+  "installed_artifacts": [
+    "Generic.Client.Info",
+    "Generic.System.HostsFile",
+    "Linux.Applications.Docker.Info",
+    "Linux.Debian.Packages",
+    "Linux.Network.NetstatEnriched",
+    "Linux.Proc.Modules",
+    "Linux.RHEL.Packages",
+    "Linux.Ssh.AuthorizedKeys",
+    "Linux.SuSE.Packages",
+    "Linux.Sys.BashHistory",
+    "Linux.Sys.Crontab",
+    "Linux.Sys.Groups",
+    "Linux.Sys.LastUserLogin",
+    "Linux.Sys.Pslist",
+    "Linux.Sys.SUID",
+    "Linux.Sys.Services",
+    "Linux.Sys.Users",
+    "MacOS.Applications.MRU",
+    "MacOS.Detection.Autoruns",
+    "MacOS.Network.Netstat",
+    "MacOS.Search.FileFinder",
+    "MacOS.System.Packages",
+    "MacOS.System.QuarantineEvents",
+    "MacOS.System.TCC",
+    "MacOS.System.Users",
+    "MacOS.System.Wifi",
+    "Windows.Analysis.EvidenceOfDownload",
+    "Windows.Detection.Impersonation",
+    "Windows.EventLogs.Cleared",
+    "Windows.EventLogs.Evtx",
+    "Windows.EventLogs.ExplicitLogon",
+    "Custom.Windows.EventLogs.Modifications",
+    "Custom.Windows.EventLogs.PowershellModule",
+    "Windows.EventLogs.PowershellScriptblock",
+    "Windows.EventLogs.RDPAuth",
+    "Windows.EventLogs.ScheduledTasks",
+    "Windows.EventLogs.ServiceCreationComspec",
+    "Windows.Forensics.Prefetch",
+    "Windows.Network.NetstatEnriched",
+    "Windows.Persistence.PermanentWMIEvents",
+    "Windows.Registry.RecentDocs",
+    "Windows.Registry.WDigest",
+    "Windows.Sys.FirewallRules",
+    "Windows.Sys.StartupItems",
+    "Windows.Sys.Users",
+    "Windows.System.AuditPolicy",
+    "Windows.System.CriticalServices",
+    "Windows.System.DNSCache",
+    "Windows.System.HostsFile",
+    "Windows.System.LocalAdmins",
+    "Windows.System.Pslist",
+    "Windows.System.Services",
+    "Windows.System.TaskScheduler"
+  ],
   "playbooks": {
     "linux_process": {
       "platform": "linux",
@@ -23,12 +83,2921 @@
           "parameter_builder": "linux_netstat"
         }
       ]
+    },
+    "linux_auth": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "Linux.Sys.LastUserLogin",
+          "parameter_builder": "linux_last_logins"
+        },
+        {
+          "name": "Linux.Network.NetstatEnriched",
+          "parameter_builder": "linux_netstat"
+        }
+      ]
+    },
+    "linux_accounts": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Users",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Groups",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.LastUserLogin",
+          "parameter_builder": "linux_last_logins"
+        }
+      ]
+    },
+    "linux_persistence": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "Linux.Sys.Services",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Crontab",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Ssh.AuthorizedKeys",
+          "parameter_builder": "linux_authorized_keys"
+        }
+      ]
+    },
+    "linux_system": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Services",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Proc.Modules",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Generic.System.HostsFile",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "linux_history": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "Linux.Sys.BashHistory",
+          "parameter_builder": "linux_bash_history"
+        }
+      ]
+    },
+    "linux_containers": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "Linux.Applications.Docker.Info",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "linux_suid": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "Linux.Sys.SUID",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "linux_packages": {
+      "platform": "linux",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.RHEL.Packages",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Debian.Packages",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.SuSE.Packages",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "darwin_process": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.Network.Netstat",
+          "parameter_builder": "darwin_netstat"
+        }
+      ]
+    },
+    "darwin_auth": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.System.Users",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "MacOS.Network.Netstat",
+          "parameter_builder": "darwin_netstat"
+        }
+      ]
+    },
+    "darwin_accounts": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.System.Users",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "darwin_persistence": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.Detection.Autoruns",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "darwin_security": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.Detection.Autoruns",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "MacOS.System.TCC",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "darwin_files": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.System.QuarantineEvents",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "MacOS.Applications.MRU",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "darwin_network": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.Network.Netstat",
+          "parameter_builder": "darwin_netstat"
+        },
+        {
+          "name": "Generic.System.HostsFile",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "MacOS.System.Wifi",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "darwin_packages": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "MacOS.System.Packages",
+          "parameter_builder": "darwin_packages"
+        }
+      ]
+    },
+    "darwin_ssh_keys": {
+      "platform": "darwin",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Linux.Sys.Pslist",
+          "parameter_builder": "linux_pslist"
+        },
+        {
+          "name": "MacOS.Search.FileFinder",
+          "parameter_builder": "darwin_authorized_keys"
+        }
+      ]
+    },
+    "windows_process": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Network.NetstatEnriched",
+          "parameter_builder": "windows_netstat"
+        }
+      ]
+    },
+    "windows_auth": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Sys.Users",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.LocalAdmins",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.EventLogs.ExplicitLogon",
+          "parameter_builder": "windows_explicit_logon"
+        }
+      ]
+    },
+    "windows_security_events": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.EventLogs.Evtx",
+          "parameter_builder": "windows_security_evtx"
+        },
+        {
+          "name": "Windows.System.LocalAdmins",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "windows_accounts": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Sys.Users",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.LocalAdmins",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "windows_persistence": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Sys.StartupItems",
+          "parameter_builder": "windows_startup"
+        },
+        {
+          "name": "Windows.System.Services",
+          "parameter_builder": "windows_services"
+        },
+        {
+          "name": "Windows.System.TaskScheduler",
+          "parameter_builder": "windows_tasks"
+        }
+      ]
+    },
+    "windows_security": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.CriticalServices",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.AuditPolicy",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.Sys.FirewallRules",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Services",
+          "parameter_builder": "windows_services"
+        }
+      ]
+    },
+    "windows_eventlogs": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Custom.Windows.EventLogs.Modifications",
+          "parameter_builder": "windows_log_modifications"
+        },
+        {
+          "name": "Windows.EventLogs.Cleared",
+          "parameter_builder": "windows_cleared_logs"
+        },
+        {
+          "name": "Windows.System.Services",
+          "parameter_builder": "windows_services"
+        }
+      ]
+    },
+    "windows_powershell": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.EventLogs.PowershellScriptblock",
+          "parameter_builder": "windows_ps_scriptblock"
+        },
+        {
+          "name": "Custom.Windows.EventLogs.PowershellModule",
+          "parameter_builder": "windows_ps_module"
+        }
+      ]
+    },
+    "windows_lateral": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Network.NetstatEnriched",
+          "parameter_builder": "windows_netstat"
+        },
+        {
+          "name": "Windows.EventLogs.ExplicitLogon",
+          "parameter_builder": "windows_explicit_logon"
+        },
+        {
+          "name": "Windows.EventLogs.RDPAuth",
+          "parameter_builder": "windows_rdp_auth"
+        }
+      ]
+    },
+    "windows_files": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Analysis.EvidenceOfDownload",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.Registry.RecentDocs",
+          "parameter_builder": "windows_recent_docs"
+        },
+        {
+          "name": "Windows.Forensics.Prefetch",
+          "parameter_builder": "windows_prefetch"
+        }
+      ]
+    },
+    "windows_wmi": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Persistence.PermanentWMIEvents",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "windows_credentials": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Detection.Impersonation",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.Registry.WDigest",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "windows_network": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.Network.NetstatEnriched",
+          "parameter_builder": "windows_netstat"
+        },
+        {
+          "name": "Windows.System.DNSCache",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.HostsFile",
+          "parameter_builder": "empty"
+        }
+      ]
+    },
+    "windows_tasks": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.System.TaskScheduler",
+          "parameter_builder": "windows_tasks"
+        },
+        {
+          "name": "Windows.EventLogs.ScheduledTasks",
+          "parameter_builder": "windows_task_events"
+        }
+      ]
+    },
+    "windows_services": {
+      "platform": "windows",
+      "mode": "manual",
+      "timeout_seconds": 300,
+      "row_limit": 10000,
+      "time_window_seconds": 900,
+      "artifacts": [
+        {
+          "name": "Generic.Client.Info",
+          "parameter_builder": "empty"
+        },
+        {
+          "name": "Windows.System.Pslist",
+          "parameter_builder": "windows_pslist"
+        },
+        {
+          "name": "Windows.System.Services",
+          "parameter_builder": "windows_services"
+        },
+        {
+          "name": "Windows.EventLogs.ServiceCreationComspec",
+          "parameter_builder": "empty"
+        }
+      ]
     }
   },
   "rules": {
+    "6ace50e0f4876d4ecb19e330": {
+      "state": "ENABLED",
+      "alert": false,
+      "decision": "no_collection",
+      "reason_code": "non_alert_informational"
+    },
+    "6ad2f613f79a5f5fc59ed448": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "LNX - Добавление/удаление пользователя"
+    },
+    "6ad2f614f79a5f5fc59ed450": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_suid",
+      "title": "LNX - Изменение прав доступа (chmod)"
+    },
+    "6ad2f614f79a5f5fc59ed45a": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Брутфорс SSH (5+ неудачных входов за 5 мин)"
+    },
+    "6ad2f614f79a5f5fc59ed462": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Неудачная попытка sudo"
+    },
+    "6ad2f614f79a5f5fc59ed46e": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Использование sudo"
+    },
+    "6ad2f614f79a5f5fc59ed477": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Остановка службы (systemctl stop)"
+    },
+    "6ad2f614f79a5f5fc59ed47f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_auth",
+      "title": "macOS - Изменение /etc/sudoers"
+    },
+    "6ad2f614f79a5f5fc59ed487": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Подозрительный процесс открыл TCP-порт"
+    },
+    "6ad2f614f79a5f5fc59ed48f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_auth",
+      "title": "macOS - Выполнение команды через sudo"
+    },
+    "6ad2f614f79a5f5fc59ed497": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_auth",
+      "title": "macOS - Неудачная попытка sudo (неверный пароль)"
+    },
+    "6ad2f614f79a5f5fc59ed49f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Новый/изменённый plist в автозагрузке"
+    },
+    "6ad2f615f79a5f5fc59ed4a7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Активность AirDrop"
+    },
+    "6ad2f615f79a5f5fc59ed4b1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_files",
+      "title": "macOS - Подключено Apple-устройство (iPhone/iPad/iPod)"
+    },
+    "6ad2f615f79a5f5fc59ed4b9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_files",
+      "title": "macOS - Подключён USB-накопитель"
+    },
+    "6ad2f615f79a5f5fc59ed4c1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_files",
+      "title": "macOS - Подключено мобильное устройство (не Apple)"
+    },
+    "6ad2f615f79a5f5fc59ed4c9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Изменение группы «Администраторы домена»"
+    },
+    "6ad2f615f79a5f5fc59ed4d1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_auth",
+      "title": "Windows - Подбор пароля (5+ ошибок входа 4625 за 5 мин)"
+    },
+    "6ad2f615f79a5f5fc59ed4d9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Создание/удаление локального пользователя (net user)"
+    },
+    "6ad2f7ccf79a5f5fc59edafa": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_persistence",
+      "title": "LNX - Добавление SSH-ключа в authorized_keys"
+    },
+    "6ad30ab9cc18050c4f1d7d96": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "LNX - Изменение /etc/passwd, shadow, group"
+    },
+    "6ad30ab9cc18050c4f1d7d9e": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Изменение sshd_config"
+    },
+    "6ad30ab9cc18050c4f1d7da6": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Обратная оболочка (/dev/tcp)"
+    },
+    "6ad30ab9cc18050c4f1d7daf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_history",
+      "title": "LNX - Затирание следов (shred, history, truncate логов)"
+    },
+    "6ad30ab9cc18050c4f1d7db7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Отключение аудита или удаление правил auditd"
+    },
     "6ad30ab9cc18050c4f1d7dbf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
       "playbook": "linux_process",
       "title": "LNX - Подозрительные утилиты (base64, nc, socat, scp)"
+    },
+    "6ad30ab9cc18050c4f1d7dc7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Исполнение из памяти (memfd_create)"
+    },
+    "6ad30abacc18050c4f1d7dcf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_persistence",
+      "title": "LNX - Закрепление через systemctl enable"
+    },
+    "6ad30abacc18050c4f1d7dd7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Изменение правил firewall (iptables, nft)"
+    },
+    "6ad30abacc18050c4f1d7ddf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Отказ SELinux (AVC)"
+    },
+    "6ad30abacc18050c4f1d7de7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Разведка (id, whoami)"
+    },
+    "6ad30abacc18050c4f1d7def": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_eventlogs",
+      "title": "Windows - Очистка журнала событий"
+    },
+    "6ad30abacc18050c4f1d7df7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_credentials",
+      "title": "Windows - Доступ к памяти LSASS"
+    },
+    "6ad30abacc18050c4f1d7dff": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Defender обнаружил угрозу или отключён"
+    },
+    "6ad30abacc18050c4f1d7e07": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_files",
+      "title": "Windows - Удаление теневых копий"
+    },
+    "6ad30abacc18050c4f1d7e0f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - Офисное приложение запустило оболочку"
+    },
+    "6ad30abacc18050c4f1d7e17": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_powershell",
+      "title": "Windows - PowerShell с закодированной командой"
+    },
+    "6ad30abacc18050c4f1d7e1f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_powershell",
+      "title": "Windows - PowerShell скачивает и исполняет код"
+    },
+    "6ad30abacc18050c4f1d7e27": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Изменение привилегированных групп и учёток"
+    },
+    "6ad30abacc18050c4f1d7e31": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_services",
+      "title": "Windows - Новая служба"
+    },
+    "6ad30abacc18050c4f1d7e3c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_persistence",
+      "title": "Windows - Автозагрузка через ключ реестра Run"
+    },
+    "6ad30abacc18050c4f1d7e44": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - LOLBins (certutil, mshta, bitsadmin, regsvr32)"
+    },
+    "6ad30abbcc18050c4f1d7e4c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_tasks",
+      "title": "Windows - Создание задачи через schtasks"
+    },
+    "6ad30abbcc18050c4f1d7e57": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_lateral",
+      "title": "Windows - Вход по RDP"
+    },
+    "6ad30abbcc18050c4f1d7e5f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - Серия разведки (5+ команд за 5 мин)"
+    },
+    "6ad30abbcc18050c4f1d7e67": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Отключение SIP или Gatekeeper"
+    },
+    "6ad30abbcc18050c4f1d7e70": {
+      "state": "DISABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "rule_disabled"
+    },
+    "6ad30abbcc18050c4f1d7e78": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Фишинговый запрос пароля через osascript"
+    },
+    "6ad30abbcc18050c4f1d7e84": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Обратная оболочка (/dev/tcp, pty.spawn)"
+    },
+    "6ad30abbcc18050c4f1d7e8c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Вмешательство в TCC"
+    },
+    "6ad30abbcc18050c4f1d7e94": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_accounts",
+      "title": "macOS - Создание пользователя или изменение групп"
+    },
+    "6ad30abbcc18050c4f1d7e9c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Запуск программы из /tmp или /Users/Shared"
+    },
+    "6ad30abbcc18050c4f1d7ea4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Загрузка расширения ядра"
+    },
+    "6ad30abbcc18050c4f1d7eac": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Включение удалённого входа или Screen Sharing"
+    },
+    "6ad30abccc18050c4f1d7eb4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Снятие карантина с приложения"
+    },
+    "6ad30e17cc18050c4f1d903d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Bi.Zone: новый элемент автозагрузки"
+    },
+    "6ad30e17cc18050c4f1d904c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_ssh_keys",
+      "title": "macOS - Bi.Zone: неизвестный SSH-ключ в authorized_keys"
+    },
+    "6ad30e17cc18050c4f1d9059": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_auth",
+      "title": "macOS - Bi.Zone: новое правило в sudoers"
+    },
+    "6ad30e18cc18050c4f1d9066": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_accounts",
+      "title": "macOS - Bi.Zone: новый пользователь"
+    },
+    "6ad30e18cc18050c4f1d9073": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Bi.Zone: смена DNS-серверов"
+    },
+    "6ad30e18cc18050c4f1d9080": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Bi.Zone: подозрительная запись в hosts"
+    },
+    "6ad30e18cc18050c4f1d908f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Bi.Zone: процесс из /tmp или /Users/Shared"
+    },
+    "6ad30e18cc18050c4f1d909c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_auth",
+      "title": "macOS - Bi.Zone: неудачные входы по SSH"
+    },
+    "6ad30e19cc18050c4f1d90a9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Bi.Zone: опасная команда в истории оболочки"
+    },
+    "6ad382b8cc18050c4f1ecc98": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad382b8cc18050c4f1ecca0": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Подбор пароля (10+ PREAUTH_FAILED за 5 мин)"
+    },
+    "6ad382b8cc18050c4f1ecca8": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ad383f1cc18050c4f1ed7e3": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ad383f1cc18050c4f1ed7eb": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "FREEIPA - Выпуск сертификата в CA (Dogtag)"
+    },
+    "6ad383f1cc18050c4f1ed7f3": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Отключение Firewall (netsh или PS)"
+    },
+    "6ad38453cc18050c4f1edb48": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ad46833cc18050c4f225c18": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad46833cc18050c4f225c28": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad46834cc18050c4f225c30": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fd80": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fd88": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fd90": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fd98": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fda0": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fdaa": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a510ee89e53dab55fdb6": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a524ee89e53dab55feb3": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a524ee89e53dab55febf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a524ee89e53dab55fec7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a524ee89e53dab55fecf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a524ee89e53dab55fed7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a524ee89e53dab55fedf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a525ee89e53dab55fee9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ad8a59eee89e53dab5601a1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae61b2bbb96dbe50879ba99": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_auth",
+      "title": "Windows - Вход из неизвестной сети (4624, тип 3 или 10)"
+    },
+    "6ae61b2bbb96dbe50879baa1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_network",
+      "title": "Windows - Именованные каналы C2 (Cobalt Strike и аналоги)"
+    },
+    "6ae61b2bbb96dbe50879baa9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_network",
+      "title": "Windows - DNS-запрос к туннелям и файлообменникам"
+    },
+    "6ae61b2bbb96dbe50879bab1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_network",
+      "title": "Windows - wscript, cscript, mshta или regsvr32 ходит во внешнюю сеть"
+    },
+    "6ae61b2bbb96dbe50879bab9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Исключения или отключение защиты Defender"
+    },
+    "6ae61b2bbb96dbe50879bac1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_persistence",
+      "title": "Windows - Закрепление через IFEO Debugger, AppInit_DLLs и Winlogon"
+    },
+    "6ae61b2bbb96dbe50879bac9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_credentials",
+      "title": "Windows - Дамп учётных данных (reg save, comsvcs, ntdsutil)"
+    },
+    "6ae61b2bbb96dbe50879bad4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_files",
+      "title": "Windows - Office, wscript или mshta создал исполняемый файл"
+    },
+    "6ae61b2bbb96dbe50879badc": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_wmi",
+      "title": "Windows - Командная оболочка запущена через WMI"
+    },
+    "6ae61b2cbb96dbe50879bae4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Добавление в локальные администраторы (командная строка)"
+    },
+    "6ae61b2cbb96dbe50879baec": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_auth",
+      "title": "Windows - Перебор несуществующих пользователей (5+ за 10 мин)"
+    },
+    "6ae61e20bb96dbe50879d7ee": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Запуск из /tmp, /dev/shm, /var/tmp"
+    },
+    "6ae61e21bb96dbe50879d7f6": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Вход по SSH из неизвестной сети"
+    },
+    "6ae61e21bb96dbe50879d7fe": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Загрузка модуля ядра"
+    },
+    "6ae61e21bb96dbe50879d806": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_persistence",
+      "title": "LNX - Закрепление через cron"
+    },
+    "6ae61e21bb96dbe50879d810": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_suid",
+      "title": "LNX - Установка setuid или setgid"
+    },
+    "6ae61e21bb96dbe50879d818": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Обратная оболочка (python, perl, nc, socat, mkfifo)"
+    },
+    "6ae61e21bb96dbe50879d820": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - SSH-туннель (-R, -L, -D)"
+    },
+    "6ae61e21bb96dbe50879d828": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Массовое удаление файлов (200+ за 5 мин)"
+    },
+    "6ae620d1bb96dbe50879f21f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Установка или удаление профиля конфигурации"
+    },
+    "6ae620d1bb96dbe50879f229": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Добавление корневого сертификата"
+    },
+    "6ae620d1bb96dbe50879f231": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Элемент входа через sfltool или osascript"
+    },
+    "6ae620d1bb96dbe50879f239": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Отключение межсетевого экрана (socketfilterfw, pfctl)"
+    },
+    "6ae620d1bb96dbe50879f241": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Загрузка launchd-задания (load, bootstrap, submit)"
+    },
+    "6ae620d1bb96dbe50879f249": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Скачивание и запуск (curl | sh)"
+    },
+    "6ae620d2bb96dbe50879f251": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_files",
+      "title": "macOS - Копирование данных браузера"
+    },
+    "6ae620d2bb96dbe50879f259": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Очистка журналов"
+    },
+    "6ae620d2bb96dbe50879f263": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Передача данных наружу (scp, rsync, nc, socat)"
+    },
+    "6ae620d2bb96dbe50879f26b": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Подмена библиотек (DYLD_INSERT_LIBRARIES)"
+    },
+    "6ae620d2bb96dbe50879f273": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Изменение базы авторизации (authorizationdb)"
+    },
+    "6ae629bdbb96dbe5087a00c8": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ae629bebb96dbe5087a00d5": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ae629bebb96dbe5087a00e2": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ae629bebb96dbe5087a00ef": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ae629e4bb96dbe5087a0197": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ae6329ebb96dbe5087a1478": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_auth",
+      "title": "Windows - Подбор пароля и успешный вход с одного IP (4625 и 4624)"
+    },
+    "6ae6329ebb96dbe5087a1482": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Подбор пароля и успешный вход по SSH (6+ событий за 15 мин)"
+    },
+    "6ae6329ebb96dbe5087a148f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Вход по SSH ночью (00:00-06:00)"
+    },
+    "6ae6329fbb96dbe5087a149c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_lateral",
+      "title": "Windows - Вход по сети или RDP ночью (00:00-06:00)"
+    },
+    "6ae6329fbb96dbe5087a14b2": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Архивация данных пользователем (tar, zip, 7z)"
+    },
+    "6ae6329fbb96dbe5087a14c0": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Передача файлов наружу (scp, sftp, rsync) из терминала"
+    },
+    "6ae6329fbb96dbe5087a14cd": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Изменение сетевых настроек и /etc/hosts"
+    },
+    "6ae6329fbb96dbe5087a14da": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_containers",
+      "title": "LNX - Привилегированный контейнер или docker.sock"
+    },
+    "6ae6329fbb96dbe5087a14e7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae632a0bb96dbe5087a14f4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae632a0bb96dbe5087a1504": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae632a0bb96dbe5087a1515": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae6351fbb96dbe5087a23a2": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Запись экрана на MacBook (replayd)"
+    },
+    "6ae6351fbb96dbe5087a23af": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - JXA-скрипт через osascript"
+    },
+    "6ae6351fbb96dbe5087a23c0": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Открытая Wi-Fi сеть в сохранённых (сводка раз в сутки)"
+    },
+    "6ae6351fbb96dbe5087a23cd": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae6351fbb96dbe5087a23dc": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6ae6b02abb96dbe5087a8d23": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "FREEIPA - Изменение пользователей, групп и правил через API"
+    },
+    "6ae6b02abb96dbe5087a8d34": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Неудачный вход в веб-интерфейс"
+    },
+    "6ae6b02bbb96dbe5087a8d41": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6ae6b02bbb96dbe5087a8d4e": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Defender: сигнатуры не обновлялись 7 дней"
+    },
+    "6ae6c49dbb96dbe5087ac402": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Остановка Sysmon, winlogbeat, Defender или журнала событий"
+    },
+    "6ae6c49dbb96dbe5087ac40f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Остановка auditd, rsyslog, wazuh, filebeat, sshd или firewalld"
+    },
+    "6ae6c49dbb96dbe5087ac423": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Остановка агентов сбора логов и защиты (launchctl)"
+    },
+    "6ae6c49ebb96dbe5087ac430": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - Запуск утилит удалённого доступа и туннелей"
+    },
+    "6ae6c49ebb96dbe5087ac43d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Запуск утилит удалённого доступа и туннелей"
+    },
+    "6ae6c49ebb96dbe5087ac450": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Запуск утилит удалённого доступа и туннелей"
+    },
+    "6ae6c49ebb96dbe5087ac45d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - Утилиты выгрузки в облако (rclone, MEGAsync, WinSCP)"
+    },
+    "6ae6c49fbb96dbe5087ac46d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Утилиты выгрузки в облако (rclone, MEGAcmd)"
+    },
+    "6ae6c49fbb96dbe5087ac47c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Утилиты выгрузки в облако (rclone, MEGAsync)"
+    },
+    "6ae6c49fbb96dbe5087ac489": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Обход UAC через реестр (fodhelper, eventvwr, ms-settings)"
+    },
+    "6ae6c49fbb96dbe5087ac49a": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - Маскировка под системный процесс (svchost, lsass, csrss вне System32)"
+    },
+    "6ae6c4a0bb96dbe5087ac4a7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Веб-сервер запустил оболочку"
+    },
+    "6ae6c4a0bb96dbe5087ac4b4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_process",
+      "title": "Windows - Разведка в домене (nltest, dsquery, AdFind, SharpHound)"
+    },
+    "6ae6c4a0bb96dbe5087ac4c1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Сканеры сети (nmap, masscan, arp-scan)"
+    },
+    "6ae6c4a0bb96dbe5087ac4d1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Сканеры сети (nmap, masscan, arp-scan)"
+    },
+    "6ae6c4a0bb96dbe5087ac4e0": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_services",
+      "title": "Windows - PsExec и аналоги (процесс, служба, канал)"
+    },
+    "6ae6c4a1bb96dbe5087ac4ed": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Успешный вход root по SSH"
+    },
+    "6ae6c4a1bb96dbe5087ac4fd": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_files",
+      "title": "Windows - Поиск паролей в файлах (findstr, Select-String)"
+    },
+    "6ae6c4a1bb96dbe5087ac50a": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Поиск паролей в файлах (grep -r, find)"
+    },
+    "6ae6c4a1bb96dbe5087ac51b": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Поиск паролей в файлах (grep -r по / и ~)"
+    },
+    "6ae6c4a2bb96dbe5087ac528": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_network",
+      "title": "Windows - Подозрительно длинные DNS-имена (туннель, DGA)"
+    },
+    "6ae6c4a2bb96dbe5087ac535": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_files",
+      "title": "Windows - Признаки шифровальщика (расширения и записки)"
+    },
+    "6ae6c4a2bb96dbe5087ac552": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_files",
+      "title": "Windows - Архивация не из проводника (7z, WinRAR, Compress-Archive)"
+    },
+    "6ae6ca49bb96dbe5087af281": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security_events",
+      "title": "Windows - Kerberoasting: билет службы с шифрованием RC4 (4769)"
+    },
+    "6ae6ca4abb96dbe5087af290": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security_events",
+      "title": "Windows - Подбор пароля на DC по Kerberos (10+ ошибок 4771 за 5 мин)"
+    },
+    "6ae6ca4abb96dbe5087af29d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security_events",
+      "title": "Windows - Подбор пароля на DC по NTLM (10+ ошибок 4776 за 5 мин)"
+    },
+    "6ae6ca4abb96dbe5087af2aa": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security_events",
+      "title": "Windows - DCSync: репликация каталога не от контроллера домена (4662)"
+    },
+    "6ae6ca4abb96dbe5087af2b9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security",
+      "title": "Windows - Изменение политики аудита (4719)"
+    },
+    "6ae6ca4abb96dbe5087af2cf": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Создана учётная запись (4720)"
+    },
+    "6ae6ca4abb96dbe5087af2dc": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Добавление в группу администраторов (4728, 4732, 4756)"
+    },
+    "6ae6ca4bbb96dbe5087af2ea": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Сброс пароля учётной записи (4724)"
+    },
+    "6ae6ca4bbb96dbe5087af2fb": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_auth",
+      "title": "Windows - Блокировка учётной записи (4740)"
+    },
+    "6ae6ca4bbb96dbe5087af30f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_accounts",
+      "title": "Windows - Создана компьютерная учётная запись пользователем (4741)"
+    },
+    "6ae6ca4bbb96dbe5087af31c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_services",
+      "title": "Windows - Установка службы вне System32 и Program Files (4697)"
+    },
+    "6ae6ca4bbb96dbe5087af329": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security_events",
+      "title": "Windows - Изменение объектов AD: GPO и AdminSDHolder (5136)"
+    },
+    "6ae6ca4bbb96dbe5087af33c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_wmi",
+      "title": "Windows - Постоянная подписка WMI (5861)"
+    },
+    "6ae6ca4bbb96dbe5087af349": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_tasks",
+      "title": "Windows - Задание планировщика с Temp, AppData или Public (4698)"
+    },
+    "6ae6ca4cbb96dbe5087af358": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_lateral",
+      "title": "Windows - Удалённый вход по WinRM (91)"
+    },
+    "6ae6cc6abb96dbe5087b1075": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "LNX - Создана локальная учётная запись (useradd)"
+    },
+    "6ae6cc6bbb96dbe5087b1082": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "LNX - Участник добавлен в группу wheel, sudo, root, adm или docker"
+    },
+    "6ae6cc6bbb96dbe5087b1097": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "LNX - Подбор пароля sudo или su (5+ ошибок за 5 мин)"
+    },
+    "6ae6cc6bbb96dbe5087b10a4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_suid",
+      "title": "LNX - Установка бита setuid или setgid (chmod u+s)"
+    },
+    "6ae6cc6bbb96dbe5087b10b1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "LNX - Обратная оболочка (bash -i, nc -e, socat exec)"
+    },
+    "6ae6cc6cbb96dbe5087b10c4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_history",
+      "title": "LNX - Очистка истории команд (history -c, unset HISTFILE)"
+    },
+    "6ae6cc6cbb96dbe5087b10d5": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Загрузка или выгрузка модуля ядра (insmod, modprobe, rmmod)"
+    },
+    "6ae6cc6cbb96dbe5087b10e2": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_persistence",
+      "title": "LNX - Правка crontab (crontab -e)"
+    },
+    "6ae6cc6cbb96dbe5087b10f4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Отключение SELinux или аудита (setenforce 0, auditctl -e 0)"
+    },
+    "6ae6cc6dbb96dbe5087b1109": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_containers",
+      "title": "LNX - Опасный запуск контейнера (--privileged, -v /:/, docker.sock)"
+    },
+    "6ae6cc6dbb96dbe5087b1118": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "LNX - Ручная смена системного времени"
+    },
+    "6ae6cc6dbb96dbe5087b1128": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Снятие карантина вне Applications или отключение Gatekeeper"
+    },
+    "6ae6cc6ebb96dbe5087b1138": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Отключение SIP (csrutil disable)"
+    },
+    "6ae6cc6ebb96dbe5087b114d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Установка доверенного корневого сертификата"
+    },
+    "6ae6cc6ebb96dbe5087b115b": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_security",
+      "title": "macOS - Выгрузка паролей из Keychain (security dump-keychain)"
+    },
+    "6ae6cc6ebb96dbe5087b116c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Поддельное окно ввода пароля (osascript hidden answer)"
+    },
+    "6ae6cc6fbb96dbe5087b117c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_accounts",
+      "title": "macOS - Создана учётная запись (dscl, sysadminctl)"
+    },
+    "6ae6cc6fbb96dbe5087b119b": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Включение удалённого доступа (SSH, Screen Sharing, ARD)"
+    },
+    "6ae6cc6fbb96dbe5087b11aa": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Установка конфигурационного профиля (profiles install)"
+    },
+    "6ae6cc70bb96dbe5087b11bb": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Загрузка расширения ядра или системного расширения"
+    },
+    "6ae6cc70bb96dbe5087b11ca": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_network",
+      "title": "macOS - Смена DNS или прокси (networksetup)"
+    },
+    "6ae6cc70bb96dbe5087b11db": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_process",
+      "title": "macOS - Уничтожение резервных копий или дисков (tmutil, diskutil)"
+    },
+    "6ae6cc70bb96dbe5087b11e8": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "darwin_persistence",
+      "title": "macOS - Добавление элемента входа (sfltool, osascript login item)"
+    },
+    "6ae6e1c2bb96dbe5087b7717": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "FREEIPA - Изменение привилегированных групп и ролей (API)"
+    },
+    "6ae6e1c2bb96dbe5087b7724": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "FREEIPA - Изменение HBAC и sudo-правил (API)"
+    },
+    "6ae6e1c2bb96dbe5087b7734": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "FREEIPA - Изменение политик паролей, Kerberos и конфигурации (API)"
+    },
+    "6ae6e1c2bb96dbe5087b7741": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "FREEIPA - Разблокировка учётной записи, ключи и сертификаты пользователя (API)"
+    },
+    "6ae6e1c2bb96dbe5087b774e": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Kerberos: билет службы с шифрованием RC4 (Kerberoasting)"
+    },
+    "6ae6e1c3bb96dbe5087b7760": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Kerberos: вход отключённой, заблокированной или просроченной учётной записи"
+    },
+    "6ae6e1c3bb96dbe5087b7770": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Kerberos: расхождение часов (CLOCK_SKEW)"
+    },
+    "6ae6e1c3bb96dbe5087b777d": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Массовая выгрузка из каталога LDAP (100+ записей за запрос)"
+    },
+    "6ae6e1c3bb96dbe5087b778c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_auth",
+      "title": "FREEIPA - Успешный вход в веб-интерфейс"
+    },
+    "6ae6e1c3bb96dbe5087b7799": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "FREEIPA - Остановка служб IPA на сервере (dirsrv, krb5kdc, httpd, pki)"
+    },
+    "6ae6e1c3bb96dbe5087b77a6": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "FREEIPA - Сбои certmonger (продление сертификатов)"
+    },
+    "6ae6e1c4bb96dbe5087b77b3": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_accounts",
+      "title": "FREEIPA - Прямое изменение атрибутов безопасности в каталоге (389)"
+    },
+    "6ae6f3b4bb96dbe5087bd203": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "windows_security_events",
+      "title": "Windows - Создание, удаление или изменение доверия домена (4706/4707/4716)"
+    },
+    "6aef5033bb96dbe5088792cd": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6aef5034bb96dbe5088792d9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6aef5034bb96dbe5088792e5": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6aef5034bb96dbe5088792f1": {
+      "state": "ENABLED",
+      "alert": false,
+      "decision": "no_collection",
+      "reason_code": "non_alert_informational"
+    },
+    "6aef5035bb96dbe508879305": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6aefed25bb96dbe508883e84": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed25bb96dbe508883e93": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed25bb96dbe508883ea1": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed25bb96dbe508883eae": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed25bb96dbe508883ebe": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed26bb96dbe508883eca": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed26bb96dbe508883ed6": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed26bb96dbe508883ee2": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed26bb96dbe508883eef": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed27bb96dbe508883efd": {
+      "state": "ENABLED",
+      "alert": false,
+      "decision": "no_collection",
+      "reason_code": "non_alert_informational"
+    },
+    "6aefed27bb96dbe508883f0c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed27bb96dbe508883f18": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6aefed27bb96dbe508883f24": {
+      "state": "ENABLED",
+      "alert": false,
+      "decision": "no_collection",
+      "reason_code": "non_alert_informational"
+    },
+    "6aefed27bb96dbe508883f32": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "external_analysis_target"
+    },
+    "6af042ae61b983feab67004c": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6af04f3361b983feab674560": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6af07d3861b983feab685e49": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6af07d3861b983feab685e53": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6af085b461b983feab68b921": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6af085b461b983feab68b92a": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6af085c761b983feab68b9a9": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "application_control_plane"
+    },
+    "6af08ec661b983feab68f8a4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "report_or_system_notification"
+    },
+    "6af0bfd261b983feab6a3a00": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af0bfd261b983feab6a3a09": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af0c41f61b983feab6a5014": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af0c41f61b983feab6a5020": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af0c41f61b983feab6a5027": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af0c55d61b983feab6a5664": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_system",
+      "title": "AUDIT - Работа с модулями ядра"
+    },
+    "6af0c55d61b983feab6a566b": {
+      "state": "DISABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "rule_disabled"
+    },
+    "6af0c55d61b983feab6a5672": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_persistence",
+      "title": "AUDIT - Изменение systemd-юнитов"
+    },
+    "6af0c56861b983feab6a56c5": {
+      "state": "DISABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "rule_disabled"
+    },
+    "6af0c56861b983feab6a56cc": {
+      "state": "DISABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "rule_disabled"
+    },
+    "6af0c56861b983feab6a56d3": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "AUDIT - Base64-декодирование в командной строке"
+    },
+    "6af16ff761b983feab6b2758": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_process",
+      "title": "DIFFWATCH - Новый открытый порт"
+    },
+    "6af16ff761b983feab6b275f": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_persistence",
+      "title": "DIFFWATCH - Изменение автозагрузки (unit/cron)"
+    },
+    "6af16ff761b983feab6b2766": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "collect",
+      "playbook": "linux_packages",
+      "title": "DIFFWATCH - Изменение состава пакетов"
+    },
+    "6af173f861b983feab6b2ac4": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "external_analysis_target"
+    },
+    "6af17bff61b983feab6b38a7": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "report_or_system_notification"
+    },
+    "6af1eb3961b983feab6ba943": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af2164761b983feab6bf3df": {
+      "state": "ENABLED",
+      "alert": false,
+      "decision": "no_collection",
+      "reason_code": "non_alert_informational"
+    },
+    "6af4adea61b983feab70d037": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "network_or_external_monitor"
+    },
+    "6af4b20861b983feab70ed30": {
+      "state": "ENABLED",
+      "alert": false,
+      "decision": "no_collection",
+      "reason_code": "non_alert_informational"
+    },
+    "6af6c5ae61b983feab74871b": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6af6c5af61b983feab748723": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "needs_review",
+      "reason_code": "ambiguous_endpoint_target"
+    },
+    "6afc557a61b983feab7da245": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6afc9f6761b983feab7e025f": {
+      "state": "DISABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "rule_disabled"
+    },
+    "6afd980e61b983feab7f1438": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
+    },
+    "6afdbbe961b983feab7f3a17": {
+      "state": "ENABLED",
+      "alert": true,
+      "decision": "no_collection",
+      "reason_code": "health_or_availability"
     }
+  },
+  "artifact_schemas": {
+    "Generic.Client.Info": [],
+    "Generic.System.HostsFile": [
+      "AddressRegex",
+      "HostnameRegex",
+      "hostsFileGlobs"
+    ],
+    "Linux.Applications.Docker.Info": [
+      "dockerSocket"
+    ],
+    "Linux.Debian.Packages": [
+      "linuxDpkgStatus",
+      "snapdSocket"
+    ],
+    "Linux.Network.NetstatEnriched": [
+      "CallChainRegex",
+      "CommandLineRegex",
+      "ConnectionStatusRegex",
+      "IPRegex",
+      "PortRegex",
+      "ProcessNameRegex",
+      "ProcessPathRegex",
+      "UsernameRegex"
+    ],
+    "Linux.Proc.Modules": [
+      "ProcModules"
+    ],
+    "Linux.RHEL.Packages": [],
+    "Linux.Ssh.AuthorizedKeys": [
+      "AlsoUpload",
+      "keyTypes",
+      "sshKeyFilesGlob"
+    ],
+    "Linux.SuSE.Packages": [],
+    "Linux.Sys.BashHistory": [
+      "SearchRegex",
+      "TargetGlob",
+      "WhitelistRegex"
+    ],
+    "Linux.Sys.Crontab": [
+      "Length",
+      "cronTabGlob",
+      "cronTabScripts"
+    ],
+    "Linux.Sys.Groups": [
+      "GroupFile"
+    ],
+    "Linux.Sys.LastUserLogin": [
+      "LoginType",
+      "MaxCount",
+      "excluded_users",
+      "recent_x_days",
+      "wtmpGlobs"
+    ],
+    "Linux.Sys.Pslist": [
+      "processRegex"
+    ],
+    "Linux.Sys.SUID": [
+      "GlobExpression"
+    ],
+    "Linux.Sys.Services": [],
+    "Linux.Sys.Users": [
+      "PasswordFile"
+    ],
+    "MacOS.Applications.MRU": [
+      "FinderPlistPath"
+    ],
+    "MacOS.Detection.Autoruns": [
+      "LaunchAgentsDaemonsGlob",
+      "LoginItemsGlobs",
+      "MiscItemsGlobs",
+      "ScriptingAdditionsGlobs",
+      "StartupItemsGlobs",
+      "cronTabGlob",
+      "sandboxed_loginitems"
+    ],
+    "MacOS.Network.Netstat": [
+      "AlsoCollectFullProcessTree",
+      "CallChainRegex",
+      "CommandLineRegex",
+      "ConnectionStatusRegex",
+      "IPRegex",
+      "PortRegex",
+      "ProcessNameRegex",
+      "ProcessPathRegex",
+      "UsernameRegex"
+    ],
+    "MacOS.Search.FileFinder": [
+      "Calculate_Hash",
+      "DoNotFollowSymlinks",
+      "Fetch_Xattr",
+      "ModifiedBefore",
+      "MoreRecentThan",
+      "SearchFilesGlob",
+      "SearchFilesGlobTable",
+      "UPLOAD_IS_RESUMABLE",
+      "Upload_File",
+      "YaraRule"
+    ],
+    "MacOS.System.Packages": [
+      "Length"
+    ],
+    "MacOS.System.QuarantineEvents": [
+      "QuarantineGlob"
+    ],
+    "MacOS.System.TCC": [
+      "TCCGlob"
+    ],
+    "MacOS.System.Users": [
+      "OnlyShowRealUsers",
+      "UserPlistGlob"
+    ],
+    "MacOS.System.Wifi": [
+      "WifiGlob"
+    ],
+    "Windows.Analysis.EvidenceOfDownload": [
+      "DirectoryPathGlob",
+      "ZoneIdRegex"
+    ],
+    "Windows.Detection.Impersonation": [],
+    "Windows.EventLogs.Cleared": [
+      "DateAfter",
+      "DateBefore",
+      "TargetGlob",
+      "VSSAnalysisAge"
+    ],
+    "Windows.EventLogs.Evtx": [
+      "ChannelRegex",
+      "EndDate",
+      "EvtxGlob",
+      "IDRegex",
+      "PathRegex",
+      "StartDate",
+      "VSSAnalysisAge"
+    ],
+    "Windows.EventLogs.ExplicitLogon": [
+      "DateAfter",
+      "DateBefore",
+      "EvtxGlob",
+      "ProcessNameRegex",
+      "ProcessNameWhitelist",
+      "ServerRegex",
+      "ServerWhitelist",
+      "UsernameRegex",
+      "UsernameWhitelist",
+      "VSSAnalysisAge"
+    ],
+    "Custom.Windows.EventLogs.Modifications": [
+      "DateAfter",
+      "DateBefore",
+      "ProviderRegex"
+    ],
+    "Custom.Windows.EventLogs.PowershellModule": [
+      "ContextRegex",
+      "DateAfter",
+      "DateBefore",
+      "EventLog",
+      "PayloadRegex",
+      "VSSAnalysisAge"
+    ],
+    "Windows.EventLogs.PowershellScriptblock": [
+      "DateAfter",
+      "DateBefore",
+      "EvtxGlob",
+      "LogLevel",
+      "LogLevelMap",
+      "PathWhitelist",
+      "SearchStrings",
+      "StringWhitelist",
+      "VSSAnalysisAge"
+    ],
+    "Windows.EventLogs.RDPAuth": [
+      "DateAfter",
+      "DateBefore",
+      "LocalSessionManager",
+      "RemoteConnectionManager",
+      "Security",
+      "SourceIPRegex",
+      "System",
+      "UserNameRegex",
+      "UserNameWhitelist",
+      "VSSAnalysisAge"
+    ],
+    "Windows.EventLogs.ScheduledTasks": [
+      "DateAfter",
+      "DateBefore",
+      "IocRegex",
+      "Security",
+      "SecurityEventRegex",
+      "TaskActionRegex",
+      "TaskActionWhitelist",
+      "TaskNameRegex",
+      "TaskNameWhitelist",
+      "TaskScheduler",
+      "TaskSchedulerEventRegex",
+      "UserNameRegex",
+      "VSSAnalysisAge"
+    ],
+    "Windows.EventLogs.ServiceCreationComspec": [
+      "ComspecRegex",
+      "EventLog",
+      "VSSAnalysisAge"
+    ],
+    "Windows.Forensics.Prefetch": [
+      "IncludeFilesAccessed",
+      "binaryRegex",
+      "dateAfter",
+      "dateBefore",
+      "hashRegex",
+      "prefetchGlobs"
+    ],
+    "Windows.Network.NetstatEnriched": [
+      "AuthenticodeIssuerRegex",
+      "AuthenticodeSubjectRegex",
+      "AuthenticodeVerified",
+      "AuthenticodeVerifiedMap",
+      "CommandLineRegex",
+      "DISABLE_DANGEROUS_API_CALLS",
+      "DumpProcess",
+      "Family",
+      "FamilyMap",
+      "HashRegex",
+      "IPRegex",
+      "KillProcess",
+      "PortRegex",
+      "ProcessNameRegex",
+      "ProcessPathRegex",
+      "Status",
+      "StatusMap",
+      "Type",
+      "TypeMap",
+      "UsernameRegex"
+    ],
+    "Windows.Persistence.PermanentWMIEvents": [
+      "AllRootNamespaces",
+      "Namespaces"
+    ],
+    "Windows.Registry.RecentDocs": [
+      "DateAfter",
+      "DateBefore",
+      "EntryRegex",
+      "HiveGlob",
+      "KeyGlob",
+      "Profile",
+      "SidRegex",
+      "UserRegex"
+    ],
+    "Windows.Registry.WDigest": [
+      "ShowAllValues",
+      "WDigestGlob"
+    ],
+    "Windows.Sys.FirewallRules": [
+      "regKey"
+    ],
+    "Windows.Sys.StartupItems": [
+      "AlsoUpload",
+      "runKeyGlobs",
+      "startupApprovedGlobs",
+      "startupFolderDirectories"
+    ],
+    "Windows.Sys.Users": [
+      "remoteRegKey"
+    ],
+    "Windows.System.AuditPolicy": [],
+    "Windows.System.CriticalServices": [
+      "lookupTable"
+    ],
+    "Windows.System.DNSCache": [
+      "kMapOfRecordType",
+      "kMapOfSection",
+      "kMapOfStatus"
+    ],
+    "Windows.System.HostsFile": [
+      "HostnameRegex",
+      "HostsFile",
+      "ResolutionRegex"
+    ],
+    "Windows.System.LocalAdmins": [
+      "PowerShellExe"
+    ],
+    "Windows.System.Pslist": [
+      "CommandLineRegex",
+      "DISABLE_DANGEROUS_API_CALLS",
+      "ExePathRegex",
+      "PidRegex",
+      "ProcessRegex",
+      "UntrustedAuthenticode",
+      "UseTracker",
+      "UsernameRegex"
+    ],
+    "Windows.System.Services": [
+      "Calculate_hashes",
+      "CertificateInfo",
+      "DISABLE_DANGEROUS_API_CALLS",
+      "DisplayNameRegex",
+      "FailureCommandRegex",
+      "NameRegex",
+      "PathNameRegex",
+      "ServiceDllRegex",
+      "servicesKeyGlob"
+    ],
+    "Windows.System.TaskScheduler": [
+      "AlsoUpload",
+      "TasksPath",
+      "UploadCommands",
+      "Username"
+    ]
   }
 }
