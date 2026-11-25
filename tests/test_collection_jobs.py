@@ -121,6 +121,22 @@ def test_evidence_upload_error_preserves_collection_metadata(tmp_path):
     assert final["result"]["evidence_id"] is None
 
 
+def test_case_history_includes_linked_alert_jobs_in_reverse_order(tmp_path):
+    store = collection_jobs.CollectionJobStore(tmp_path / "state.db")
+    case_job, _ = store.create("case", 73, 42, CLIENT, "linux", ARTIFACTS)
+    store.update(case_job["job_id"], "completed", result=result(), finished=True)
+    alert_job, _ = store.create("alert", 53, 42, CLIENT, "linux", ARTIFACTS)
+    store.update(alert_job["job_id"], "completed", case_id=73, result=result(), finished=True)
+    other_job, _ = store.create("case", 74, 43, CLIENT, "linux", ARTIFACTS)
+    store.update(other_job["job_id"], "completed", result=result(74), finished=True)
+
+    history = store.for_case(73)
+    assert [job["job_id"] for job in history] == [alert_job["job_id"], case_job["job_id"]]
+    assert store.for_case(73, limit=1)[0]["job_id"] == alert_job["job_id"]
+    assert store.for_case(999) == []
+    assert store.latest("case", 73)["job_id"] == case_job["job_id"]
+
+
 def test_restart_marks_unfinished_job_interrupted_without_repeating_it(tmp_path):
     store = collection_jobs.CollectionJobStore(tmp_path / "state.db")
     job, duplicate = store.create("case", 73, 42, CLIENT, "linux", ARTIFACTS)

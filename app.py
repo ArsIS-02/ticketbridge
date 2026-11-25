@@ -1633,17 +1633,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "bad key"}, 403)
             manager = _collection_job_manager()
             if p.path == "/velociraptor/jobs":
-                if set(query) - {"key", "alert_id", "case_id"}:
+                if set(query) - {"key", "alert_id", "case_id", "incident_id"}:
                     return self._json({"ok": False, "error": "Invalid job query"}, 400)
-                selectors = [name for name in ("alert_id", "case_id") if name in query]
+                selectors = [name for name in ("alert_id", "case_id", "incident_id")
+                             if name in query]
                 if len(selectors) != 1:
-                    return self._json({"ok": False, "error": "Specify alert_id or case_id"}, 400)
+                    return self._json(
+                        {"ok": False, "error": "Specify alert_id, case_id or incident_id"}, 400)
                 try:
                     target_id = int(query[selectors[0]][0])
                     if target_id <= 0:
                         raise ValueError
                 except (ValueError, TypeError):
                     return self._json({"ok": False, "error": "Invalid job target"}, 400)
+                if selectors[0] == "incident_id":
+                    return self._json(
+                        {"ok": True, "jobs": manager.store.for_case(target_id)})
                 kind = "alert" if selectors[0] == "alert_id" else "case"
                 return self._json({"ok": True, "job": manager.store.latest(kind, target_id)})
             job_id = p.path.removeprefix("/velociraptor/jobs/")

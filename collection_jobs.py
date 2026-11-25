@@ -49,6 +49,8 @@ class CollectionJobStore:
         )""")
         con.execute("""CREATE INDEX IF NOT EXISTS idx_vr_collection_jobs_target
             ON velociraptor_collection_jobs(kind, target_id, created_ts DESC)""")
+        con.execute("""CREATE INDEX IF NOT EXISTS idx_vr_collection_jobs_case
+            ON velociraptor_collection_jobs(case_id, created_ts DESC)""")
         return con
 
     def _initialize(self):
@@ -96,6 +98,19 @@ class CollectionJobStore:
                    WHERE kind=? AND target_id=? ORDER BY created_ts DESC LIMIT 1""",
                 (kind, int(target_id))).fetchone()
             return self._public(row)
+        finally:
+            con.close()
+
+    def for_case(self, case_id, limit=20):
+        """Return alert- and incident-level jobs linked to one incident."""
+        limit = max(1, min(50, int(limit)))
+        con = self._connect()
+        try:
+            rows = con.execute(
+                """SELECT * FROM velociraptor_collection_jobs
+                   WHERE case_id=? ORDER BY created_ts DESC LIMIT ?""",
+                (int(case_id), limit)).fetchall()
+            return [self._public(row) for row in rows]
         finally:
             con.close()
 

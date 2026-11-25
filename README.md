@@ -261,6 +261,9 @@ ZIP: `collection.json`, `errors.json`, `results/*.json` и `manifest.json` с SH
 той же SQLite БД TicketBridge: `queued`, `collecting`, `uploading`, затем `completed`, `partial`,
 `failed`, `evidence_error` или `error`. `GET /velociraptor/jobs/{job_id}` возвращает конкретную задачу,
 а `GET /velociraptor/jobs?case_id=...` или `?alert_id=...` — последнюю задачу для восстановления окна.
+Дополнительный `GET /velociraptor/jobs?incident_id=...` возвращает до 20 последних задач обоих типов,
+связанных с инцидентом: и запущенных из алерта, и созданных из самого инцидента. Этот отдельный селектор
+не меняет прежнюю семантику `case_id`, от которой зависит восстановление диалога сбора.
 Повторный клик по активной задаче того же алерта/инцидента возвращает существующий `job_id`, а не
 создаёт второй Flow. Одновременно разрешено `TB_VR_MANUAL_MAX_PARALLEL=2` ручных задачи (допустимо 1–4).
 После завершения запуска из алерта TicketBridge добавляет комментарий со статусом, ссылками на Flow,

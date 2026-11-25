@@ -135,9 +135,36 @@ def test_alert_async_job_reuses_linked_incident_and_adds_completion_comment(serv
     assert "F.TEST" in comments[0][1]
 
 
+def test_incident_history_includes_alert_and_case_jobs_without_changing_latest(server):
+    store = tb._collection_job_manager().store
+    case_job, _ = store.create("case", 73, 42, CLIENT, "linux", ["Generic.Client.Info"])
+    store.update(case_job["job_id"], "completed", result=collection_result(), finished=True)
+    alert_job, _ = store.create("alert", 53, 42, CLIENT, "linux", ["Generic.Client.Info"])
+    store.update(alert_job["job_id"], "completed", case_id=73,
+                 result=collection_result(), finished=True)
+    other_job, _ = store.create("case", 74, 43, CLIENT, "linux", ["Generic.Client.Info"])
+    store.update(other_job["job_id"], "completed", result=collection_result(74), finished=True)
+
+    status, payload, headers = request(
+        server + "/velociraptor/jobs?key=test-key&incident_id=73")
+    assert status == 200 and payload["ok"] is True
+    assert [job["job_id"] for job in payload["jobs"]] == [
+        alert_job["job_id"], case_job["job_id"]]
+    assert {job["kind"] for job in payload["jobs"]} == {"alert", "case"}
+    assert headers["Access-Control-Allow-Origin"] == ORIGIN
+
+    status, latest, _ = request(server + "/velociraptor/jobs?key=test-key&case_id=73")
+    assert status == 200 and latest["job"]["job_id"] == case_job["job_id"]
+    status, latest, _ = request(server + "/velociraptor/jobs?key=test-key&alert_id=53")
+    assert status == 200 and latest["job"]["job_id"] == alert_job["job_id"]
+    status, empty, _ = request(server + "/velociraptor/jobs?key=test-key&incident_id=999")
+    assert status == 200 and empty == {"ok": True, "jobs": []}
+
+
 @pytest.mark.parametrize("query", [
-    "key=bad", "key=test-key&case_id=0", "key=test-key",
-    "key=test-key&case_id=73&alert_id=53", "key=test-key&case_id=73&unknown=1",
+    "key=bad", "key=test-key&case_id=0", "key=test-key&incident_id=0", "key=test-key",
+    "key=test-key&case_id=73&alert_id=53", "key=test-key&incident_id=73&case_id=73",
+    "key=test-key&case_id=73&unknown=1", "key=test-key&incident_id=73&unknown=1",
 ])
 def test_job_queries_are_authenticated_and_validated(server, query):
     status, payload, _ = request(server + "/velociraptor/jobs?" + query)
