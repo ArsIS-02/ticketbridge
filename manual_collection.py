@@ -383,9 +383,51 @@ def resolve_client_by_hostname(hostname, environ=None, collector=None):
 class EvidenceDeliveryError(RuntimeError):
     """The Flow finished and the ZIP was built, but IRIS did not accept it."""
 
-    def __init__(self, message, collection_result):
+    def __init__(self, message, collection_result, package_content=None):
         super().__init__(message)
         self.collection_result = collection_result
+        # Bytes stay in process memory just long enough for CollectionJobManager
+        # to persist them in its private recovery spool; they are not put in JSON.
+        self.package_content = package_content
+
+
+def _delivery_metadata(result):
+    errors = result.get("errors") or []
+    result_count = int(result.get("result_count") or 0)
+    return {
+        "filename": result["filename"],
+        "generated_at": result.get("collected_at") or result.get("generated_at"),
+        "size": int(result["size"]),
+        "sha256": result["sha256"],
+        "original_event_count": result_count,
+        "context_event_count": 0,
+        "collection_errors": len(errors),
+        "file_tags": (
+            f"ticketbridge,evidence-pack,velociraptor,manual-multi,{result['platform']}"),
+        "file_description": (
+            f"Manual Velociraptor {result['platform']} multi-collection; "
+            f"{len(result.get('artifacts') or [])} succeeded, {len(errors)} failed; "
+            f"SHA-256 {result['sha256']}"),
+    }
+
+
+def attach_existing_pack(case_id, content, result, environ=None, pack=None):
+    """Attach an already collected ZIP without starting another Velociraptor Flow."""
+    metadata = _delivery_metadata(result)
+    if len(content) != metadata["size"]:
+        raise EvidenceDeliveryError("Recovery ZIP size does not match its metadata", result)
+    if hashlib.sha256(content).hexdigest() != metadata["sha256"]:
+        raise EvidenceDeliveryError("Recovery ZIP SHA-256 does not match its metadata", result)
+    env = os.environ if environ is None else environ
+    pack = pack or EvidencePack(env.get("TB_IRIS_URL", ""), env.get("TB_IRIS_KEY", ""))
+    try:
+        attached = pack.attach(case_id, content, metadata)
+    except Exception as error:
+        raise EvidenceDeliveryError(
+            f"Evidence upload retry failed: {str(error)[:500]}", result) from error
+    merged = dict(result)
+    merged.update(attached)
+    return merged
 
 
 def collect_many_and_attach(case_id, client_id, platform, artifacts, environ=None,
@@ -418,6 +460,6 @@ def collect_many_and_attach(case_id, client_id, platform, artifacts, environ=Non
         })
         raise EvidenceDeliveryError(
             f"Velociraptor ZIP was built, but Evidence upload failed: {str(error)[:500]}",
-            delivery_result) from error
+            delivery_result, package_content=content) from error
     attached.update(collection)
     return attached

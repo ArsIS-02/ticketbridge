@@ -181,3 +181,67 @@ def test_unknown_and_malformed_job_ids_return_clean_errors(server):
         server + "/velociraptor/jobs?key=test-key&case_id=73", method="OPTIONS")
     assert status == 204
     assert headers["Access-Control-Allow-Methods"] == "GET, OPTIONS"
+
+
+def test_http_evidence_retry_reuses_zip_and_does_not_start_new_collection(server, monkeypatch):
+    from hashlib import sha256
+
+    content = b"zip"
+    collections = []
+    attachments = []
+
+    def fail_upload(case_id, client_id, platform, artifacts, asset_id=None, progress=None):
+        collections.append(case_id)
+        delivery = collection_result(case_id)
+        delivery.update(evidence_id=None, size=len(content),
+                        sha256=sha256(content).hexdigest(), result_count=1,
+                        collected_at="2026-11-26T00:00:00+00:00")
+        raise tb.manual_collection.EvidenceDeliveryError(
+            "IRIS unavailable", delivery, package_content=content)
+
+    class Pack:
+        def __init__(self, url, key):
+            self.url = url
+            self.key = key
+
+        def attach(self, case_id, uploaded, metadata):
+            attachments.append((case_id, uploaded, metadata))
+            return {"case_id": case_id, "status": "completed", "evidence_id": 88,
+                    "filename": metadata["filename"], "sha256": metadata["sha256"]}
+
+    monkeypatch.setattr(tb.manual_collection, "collect_many_and_attach", fail_upload)
+    monkeypatch.setattr(tb.manual_collection, "EvidencePack", Pack)
+    status, payload, _ = request(server + "/velociraptor/collect?key=test-key", fields())
+    assert status == 202
+    job_id = payload["job"]["job_id"]
+    failed = wait_job(server, job_id)
+    assert failed["status"] == "evidence_error"
+    assert failed["result"]["recovery_available"] is True
+    retry_url = server + f"/velociraptor/jobs/{job_id}/retry-evidence?key=test-key"
+
+    status, denied, _ = request(
+        server + f"/velociraptor/jobs/{job_id}/retry-evidence?key=bad",
+        {"confirm": "yes"})
+    assert status == 403 and denied.get("ok", False) is False
+    status, invalid, _ = request(retry_url, {})
+    assert status == 400 and "confirmation" in invalid["error"]
+    status, _, headers = request(retry_url, method="OPTIONS")
+    assert status == 204
+    assert headers["Access-Control-Allow-Methods"] == "POST, OPTIONS"
+
+    status, recovered, _ = request(retry_url, {"confirm": "yes"})
+    assert status == 200 and recovered["ok"] is True
+    assert recovered["job"]["status"] == "completed"
+    assert recovered["job"]["result"]["evidence_id"] == 88
+    assert recovered["job"]["result"]["recovery_available"] is False
+    assert recovered["job"]["result"]["artifacts"][0]["flow_id"] == "F.TEST"
+    assert collections == [73]
+    assert len(attachments) == 1
+    assert attachments[0][1] == content
+
+    status, conflict, _ = request(retry_url, {"confirm": "yes"})
+    assert status == 409 and "evidence_error" in conflict["error"]
+    unknown_url = server + "/velociraptor/jobs/" + "0" * 32 + "/retry-evidence?key=test-key"
+    status, missing, _ = request(unknown_url, {"confirm": "yes"})
+    assert status == 404 and missing["ok"] is False
+    assert collections == [73]

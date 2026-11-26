@@ -202,3 +202,116 @@ def test_progress_and_delivery_error_from_real_pack_boundary(tmp_path):
         manual_collection.build_multi_pack = original_pack
     assert stages == ["uploading"]
     assert caught.value.collection_result["filename"] == "test.zip"
+
+
+def test_evidence_recovery_reuses_saved_zip_without_another_collection(tmp_path):
+    collections = []
+    retries = []
+
+    def fail_upload(case_id, asset_id, client_id, platform, artifacts, progress):
+        collections.append(case_id)
+        metadata = result(case_id)
+        metadata.update(evidence_id=None, size=3)
+        raise manual_collection.EvidenceDeliveryError(
+            "IRIS unavailable", metadata, package_content=b"zip")
+
+    def retry(job, package_path):
+        retries.append((job["job_id"], package_path.read_bytes()))
+        recovered = dict(job["result"])
+        recovered.update(evidence_id=99)
+        return recovered
+
+    jobs = collection_jobs.CollectionJobManager(
+        tmp_path / "state.db", case_runner=fail_upload, alert_runner=fail_upload,
+        evidence_retry_runner=retry)
+    job, _ = jobs.start_case(73, 42, CLIENT, "linux", ARTIFACTS)
+    failed = wait_for(lambda: (jobs.store.get(job["job_id"])["status"] == "evidence_error")
+                      and jobs.store.get(job["job_id"]))
+    package_path = jobs._package_path(job["job_id"])
+    assert failed["result"]["recovery_available"] is True
+    assert package_path.read_bytes() == b"zip"
+    assert package_path.stat().st_mode & 0o777 == 0o600
+    assert jobs.package_dir.stat().st_mode & 0o777 == 0o700
+
+    recovered = jobs.retry_evidence(job["job_id"])
+    assert recovered["status"] == "completed"
+    assert recovered["result"]["evidence_id"] == 99
+    assert recovered["result"]["recovery_available"] is False
+    assert recovered["finished_ts"] is not None
+    assert collections == [73]
+    assert retries == [(job["job_id"], b"zip")]
+    assert not package_path.exists()
+
+
+def test_failed_evidence_recovery_keeps_zip_and_original_collection(tmp_path):
+    attempts = []
+
+    def fail_upload(case_id, asset_id, client_id, platform, artifacts, progress):
+        metadata = result(case_id, status="partial")
+        metadata.update(evidence_id=None, size=3)
+        raise manual_collection.EvidenceDeliveryError(
+            "IRIS unavailable", metadata, package_content=b"zip")
+
+    def fail_retry(job, package_path):
+        attempts.append(package_path.read_bytes())
+        raise RuntimeError("IRIS is still unavailable")
+
+    jobs = collection_jobs.CollectionJobManager(
+        tmp_path / "state.db", case_runner=fail_upload, alert_runner=fail_upload,
+        evidence_retry_runner=fail_retry)
+    job, _ = jobs.start_case(73, 42, CLIENT, "linux", ARTIFACTS)
+    wait_for(lambda: jobs.store.get(job["job_id"])["status"] == "evidence_error")
+    failed = jobs.retry_evidence(job["job_id"])
+    assert failed["status"] == "evidence_error"
+    assert failed["result"]["status"] == "partial"
+    assert failed["result"]["recovery_available"] is True
+    assert "still unavailable" in failed["error"]
+    assert jobs._package_path(job["job_id"]).read_bytes() == b"zip"
+    assert attempts == [b"zip"]
+
+
+def test_evidence_recovery_rejects_wrong_state_and_legacy_job(tmp_path):
+    def unused(*args, **kwargs):
+        raise AssertionError("collector must not run")
+
+    jobs = manager(tmp_path, unused)
+    completed, _ = jobs.store.create("case", 73, 42, CLIENT, "linux", ARTIFACTS)
+    jobs.store.update(completed["job_id"], "completed", result=result(), finished=True)
+    with pytest.raises(collection_jobs.CollectionJobRecoveryError, match="evidence_error"):
+        jobs.retry_evidence(completed["job_id"])
+
+    legacy, _ = jobs.store.create("case", 74, 42, CLIENT, "linux", ARTIFACTS)
+    legacy_result = result(74)
+    legacy_result["evidence_id"] = None
+    jobs.store.update(legacy["job_id"], "evidence_error", result=legacy_result, finished=True)
+    with pytest.raises(collection_jobs.CollectionJobRecoveryError, match="no saved recovery ZIP"):
+        jobs.retry_evidence(legacy["job_id"])
+    with pytest.raises(KeyError):
+        jobs.retry_evidence("0" * 32)
+
+
+def test_attach_existing_pack_verifies_digest_and_preserves_new_evidence_id():
+    from hashlib import sha256
+
+    content = b"zip"
+    delivery = result()
+    delivery.update(evidence_id=None, size=len(content), sha256=sha256(content).hexdigest())
+
+    class Pack:
+        def __init__(self):
+            self.calls = []
+
+        def attach(self, case_id, uploaded, metadata):
+            self.calls.append((case_id, uploaded, metadata))
+            return {"case_id": case_id, "status": "completed", "evidence_id": 101,
+                    "filename": metadata["filename"], "sha256": metadata["sha256"]}
+
+    pack = Pack()
+    attached = manual_collection.attach_existing_pack(73, content, delivery, pack=pack)
+    assert attached["evidence_id"] == 101
+    assert attached["artifacts"][0]["flow_id"] == "F.TEST"
+    assert len(pack.calls) == 1
+
+    with pytest.raises(manual_collection.EvidenceDeliveryError, match="SHA-256"):
+        manual_collection.attach_existing_pack(73, b"bad", delivery, pack=pack)
+    assert len(pack.calls) == 1

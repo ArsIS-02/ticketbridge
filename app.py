@@ -1450,12 +1450,19 @@ def _collection_job_notification(job):
     _iris_add_comment(job["target_id"], "\n".join(lines))
 
 
+def _evidence_retry_job(job, package_path):
+    """Reuse the private spool; no Velociraptor collector is available here."""
+    return manual_collection.attach_existing_pack(
+        job["case_id"], package_path.read_bytes(), job["result"])
+
+
 def _collection_job_manager():
     global _COLLECTION_JOBS
     if _COLLECTION_JOBS is None:
         _COLLECTION_JOBS = collection_jobs.CollectionJobManager(
             STATE_DB, case_runner=_case_collection_job,
             alert_runner=_alert_collection_job,
+            evidence_retry_runner=_evidence_retry_job,
             notify=_collection_job_notification,
             max_parallel=int(os.environ.get("TB_VR_MANUAL_MAX_PARALLEL", "2")))
     return _COLLECTION_JOBS
@@ -1475,8 +1482,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad key"}, 403)
         self.send_response(204)
         self._cors_headers()
-        methods = ("GET, OPTIONS" if p.path in
-                   ("/velociraptor/catalog", "/velociraptor/resolve-client") or jobs_path
+        methods = ("GET, OPTIONS" if (p.path in
+                   ("/velociraptor/catalog", "/velociraptor/resolve-client")
+                   or (jobs_path and not p.path.endswith("/retry-evidence")))
                    else "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Methods", methods)
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
@@ -1486,14 +1494,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path)
+        retry_match = re.fullmatch(r"/velociraptor/jobs/([^/]+)/retry-evidence", p.path)
         if p.path not in ("/hook", "/velociraptor/collect",
-                          "/velociraptor/alert-collect"):
+                          "/velociraptor/alert-collect") and not retry_match:
             return self._json({"error": "not found"}, 404)
         if parse_qs(p.query).get("key", [""])[0] != KEY:
             return self._json({"error": "bad key"}, 403)
         n = int(self.headers.get("Content-Length", 0))
         if n > MAX_BODY_BYTES:
             return self._json({"error": "request too large"}, 413)
+        if retry_match:
+            try:
+                job_id = retry_match.group(1)
+                if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+                    raise ValueError("Invalid job_id")
+                form = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)
+                if set(form) != {"confirm"} or form.get("confirm") != ["yes"]:
+                    raise ValueError("Only explicit confirmation is accepted")
+                job = _collection_job_manager().retry_evidence(job_id)
+                return self._json({"ok": True, "job": job})
+            except KeyError:
+                return self._json({"ok": False, "error": "Collection job not found"}, 404)
+            except (collection_jobs.CollectionJobRecoveryError,
+                    collection_jobs.CollectionJobBusy) as error:
+                return self._json({"ok": False, "error": str(error)}, 409)
+            except (ValueError, TypeError) as error:
+                return self._json({"ok": False, "error": str(error)}, 400)
+            except Exception as error:
+                return self._json({"ok": False, "error": str(error)[:800]}, 502)
         if p.path == "/velociraptor/alert-collect":
             try:
                 form = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)

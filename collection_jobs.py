@@ -9,6 +9,8 @@ silently leaving them "running" or repeating an evidence collection.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import sqlite3
 import threading
 import time
@@ -149,7 +151,7 @@ class CollectionJobStore:
         return self.get(job_id), False
 
     def update(self, job_id, status, *, case_id=None, result=None, error=None,
-               started=False, finished=False):
+               started=False, finished=False, clear_finished=False):
         now = time.time()
         fields = ["status=?", "updated_ts=?"]
         values = [status, now]
@@ -168,6 +170,8 @@ class CollectionJobStore:
         if finished:
             fields.append("finished_ts=?")
             values.append(now)
+        if clear_finished:
+            fields.append("finished_ts=NULL")
         values.append(str(job_id))
         con = self._connect()
         try:
@@ -180,16 +184,27 @@ class CollectionJobStore:
         return self.get(job_id)
 
 
+class CollectionJobRecoveryError(RuntimeError):
+    """The requested job cannot use the saved Evidence recovery package."""
+
+
 class CollectionJobManager:
     def __init__(self, db_path, *, case_runner, alert_runner, notify=None,
-                 max_parallel=2, store=None):
+                 max_parallel=2, store=None, evidence_retry_runner=None,
+                 package_dir=None):
         self.store = store or CollectionJobStore(db_path)
         self.case_runner = case_runner
         self.alert_runner = alert_runner
+        self.evidence_retry_runner = evidence_retry_runner
         self.notify = notify
         self.max_parallel = max(1, min(4, int(max_parallel)))
+        self.package_dir = Path(package_dir) if package_dir else (
+            Path(db_path).resolve().parent / "velociraptor-packages")
+        self.package_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.package_dir.chmod(0o700)
         self._lock = threading.Lock()
         self._active = 0
+        self._retrying = set()
 
     def _reserve(self):
         with self._lock:
@@ -200,6 +215,43 @@ class CollectionJobManager:
     def _release(self):
         with self._lock:
             self._active = max(0, self._active - 1)
+
+    def _package_path(self, job_id):
+        job_id = str(job_id)
+        if (len(job_id) != 32
+                or any(character not in "0123456789abcdef" for character in job_id)):
+            raise ValueError("Invalid collection job_id")
+        return self.package_dir / f"{job_id}.zip"
+
+    def _save_package(self, job_id, content):
+        if not isinstance(content, (bytes, bytearray)) or not content:
+            raise ValueError("Recovery ZIP content is empty or invalid")
+        path = self._package_path(job_id)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            path.chmod(0o600)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return path
+
+    def _discard_package(self, job_id):
+        try:
+            self._package_path(job_id).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # Evidence is already attached; a stale private file cannot change
+            # the persisted outcome or make a second upload look necessary.
+            pass
 
     def start_case(self, case_id, asset_id, client_id, platform, artifacts):
         return self._start("case", case_id, asset_id, client_id, platform, artifacts)
@@ -240,6 +292,65 @@ class CollectionJobManager:
             # Notification must never change the persisted collection outcome.
             pass
 
+    def retry_evidence(self, job_id):
+        """Upload the saved ZIP only; this path has no access to a collector."""
+        job_id = str(job_id)
+        with self._lock:
+            if job_id in self._retrying:
+                raise CollectionJobBusy("Evidence recovery is already running for this job")
+            self._retrying.add(job_id)
+        try:
+            job = self.store.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            if job["status"] != "evidence_error":
+                raise CollectionJobRecoveryError(
+                    "Only a job in evidence_error can be retried without a new collection")
+            original = job.get("result") or {}
+            if original.get("recovery_available") is not True:
+                raise CollectionJobRecoveryError(
+                    "This job has no saved recovery ZIP; review it before a new collection")
+            package_path = self._package_path(job_id)
+            if not package_path.is_file():
+                raise CollectionJobRecoveryError(
+                    "The saved recovery ZIP is missing; review it before a new collection")
+            if not self.evidence_retry_runner:
+                raise CollectionJobRecoveryError("Evidence recovery is not configured")
+
+            self.store.update(job_id, "uploading", case_id=job.get("case_id"),
+                              error="", clear_finished=True)
+            try:
+                result = self.evidence_retry_runner(job, package_path)
+                if not isinstance(result, dict):
+                    raise RuntimeError("Evidence recovery returned an invalid result")
+                status = result.get("status")
+                if status not in ("completed", "partial", "failed"):
+                    raise RuntimeError("Evidence recovery returned an invalid terminal status")
+                if status != original.get("status"):
+                    raise RuntimeError("Evidence recovery changed the collection status")
+                result = dict(result)
+                result["recovery_available"] = False
+                case_id = result.get("case_id") or job.get("case_id")
+                finished = self.store.update(
+                    job_id, status, case_id=case_id, result=result,
+                    error="", finished=True)
+                self._discard_package(job_id)
+                self._notify(finished)
+                return finished
+            except Exception as error:
+                current = self.store.get(job_id) or job
+                recovery = current.get("result") or original
+                recovery["recovery_available"] = package_path.is_file()
+                finished = self.store.update(
+                    job_id, "evidence_error", case_id=current.get("case_id"),
+                    result=recovery,
+                    error=f"{type(error).__name__}: {str(error)[:700]}", finished=True)
+                self._notify(finished)
+                return finished
+        finally:
+            with self._lock:
+                self._retrying.discard(job_id)
+
     def _run(self, job_id):
         job = self.store.get(job_id)
         if not job:
@@ -273,16 +384,31 @@ class CollectionJobManager:
             case_id = getattr(error, "case_id", None) or current.get("case_id")
             cause = error
             delivery_result = None
+            package_content = None
             while cause is not None:
                 candidate = getattr(cause, "collection_result", None)
-                if candidate is not None:
+                if candidate is not None and delivery_result is None:
                     delivery_result = candidate
-                    break
+                content = getattr(cause, "package_content", None)
+                if content is not None and package_content is None:
+                    package_content = content
                 cause = cause.__cause__
+            recovery_error = None
+            if delivery_result is not None and package_content is not None:
+                delivery_result = dict(delivery_result)
+                try:
+                    self._save_package(job_id, package_content)
+                    delivery_result["recovery_available"] = True
+                except (OSError, ValueError) as save_error:
+                    delivery_result["recovery_available"] = False
+                    recovery_error = save_error
             status = "evidence_error" if delivery_result is not None else "error"
+            message = f"{type(error).__name__}: {str(error)[:700]}"
+            if recovery_error is not None:
+                message += f"; recovery ZIP save failed: {str(recovery_error)[:200]}"
             finished = self.store.update(
                 job_id, status, case_id=case_id, result=delivery_result,
-                error=f"{type(error).__name__}: {str(error)[:700]}", finished=True)
+                error=message[:800], finished=True)
             self._notify(finished)
         finally:
             self._release()
