@@ -1137,7 +1137,8 @@ def close_iris(event):
     """Закрыть алерт IRIS и добавить историю восстановления комментарием.
 
     Комментарий best-effort: его ошибка журналируется, но не отменяет уже
-    успешное закрытие. not_found означает, что PROBLEM здесь не регистрировался.
+    успешное закрытие. Если RESOLVED пришёл раньше PROBLEM, сохраняем его
+    ненадолго: send_iris не должен создать запоздалый уже восстановленный алерт.
     """
     if not IRIS or not IRIS_KEY:
         return False, "disabled"
@@ -1150,9 +1151,17 @@ def close_iris(event):
         con = state_db()
         row = con.execute("SELECT alert_id FROM iris_dedup WHERE dedup_key=?",
                           (source_ref,)).fetchone()
-        con.close()
         if not row:
-            return False, "not_found"
+            now = time.time()
+            ttl = int(os.environ.get("TB_RECOVERY_PENDING_TTL", "900"))
+            con.execute("DELETE FROM iris_recovery_pending WHERE resolved_ts<?",
+                        (now - ttl,))
+            con.execute("INSERT OR REPLACE INTO iris_recovery_pending(dedup_key,resolved_ts) VALUES(?,?)",
+                        (source_ref, now))
+            con.commit()
+            con.close()
+            return False, "pending"
+        con.close()
         alert_id = int(row[0])
         try:
             req = urllib.request.Request(
@@ -1193,6 +1202,29 @@ def close_iris(event):
         return True, str(alert_id)
 
 
+def consume_pending_zabbix_recovery(event):
+    """Погасить запоздалый PROBLEM, если его RESOLVED уже приходил."""
+    if is_zabbix_recovery(event):
+        return False
+    f = event.get("fields") or {}
+    zabbix_event_id = str(f.get("zabbix_event_id") or "").strip()
+    if not zabbix_event_id:
+        return False
+    source_ref = f"zabbix:{zabbix_event_id}"
+    with IRIS_LOCK:
+        con = state_db()
+        now = time.time()
+        ttl = int(os.environ.get("TB_RECOVERY_PENDING_TTL", "900"))
+        con.execute("DELETE FROM iris_recovery_pending WHERE resolved_ts<?", (now - ttl,))
+        row = con.execute("SELECT resolved_ts FROM iris_recovery_pending WHERE dedup_key=?",
+                          (source_ref,)).fetchone()
+        if row:
+            con.execute("DELETE FROM iris_recovery_pending WHERE dedup_key=?", (source_ref,))
+        con.commit()
+        con.close()
+        return bool(row)
+
+
 def send_gelf(short, **fields):
     msg = {"version": "1.1", "host": HOST, "short_message": short,
            "timestamp": time.time(), "level": 4}
@@ -1218,6 +1250,8 @@ def state_db():
         first_ts REAL, last_ts REAL, cnt INTEGER, last_msg TEXT)""")
     con.execute("""CREATE TABLE IF NOT EXISTS iris_dedup(
         dedup_key TEXT PRIMARY KEY, alert_id INTEGER NOT NULL, created_ts REAL NOT NULL)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS iris_recovery_pending(
+        dedup_key TEXT PRIMARY KEY, resolved_ts REAL NOT NULL)""")
     con.execute("""CREATE TABLE IF NOT EXISTS iris_corr(
         corr_key TEXT PRIMARY KEY, alert_id INTEGER NOT NULL,
         score REAL NOT NULL DEFAULT 0, hit_count INTEGER NOT NULL DEFAULT 1,
@@ -1379,10 +1413,18 @@ def handle_event(event):
                       iris_alert_id=int(info), zabbix_event_id=zabbix_event_id,
                       corr=corr_key(event))
         else:
-            event_type = "iris_recovery_skip" if info == "not_found" else "iris_recovery_error"
+            event_type = {"pending": "iris_recovery_pending",
+                          "not_found": "iris_recovery_skip"}.get(info, "iris_recovery_error")
             send_gelf(f"TicketBridge: Zabbix RESOLVED {zabbix_event_id}: {info}",
                       tool="ticketbridge", tb_event=event_type,
                       zabbix_event_id=zabbix_event_id, corr=corr_key(event))
+        return None
+
+    if consume_pending_zabbix_recovery(event):
+        zabbix_event_id = str((event.get("fields") or {}).get("zabbix_event_id") or "")
+        send_gelf(f"TicketBridge: запоздалый Zabbix PROBLEM {zabbix_event_id} подавлен: "
+                  "RESOLVED уже получен", tool="ticketbridge", tb_event="iris_race_suppressed",
+                  zabbix_event_id=zabbix_event_id, corr=corr_key(event))
         return None
 
     event = with_maintenance_context(event)

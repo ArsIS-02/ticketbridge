@@ -130,3 +130,59 @@ def test_close_iris_succeeds_when_comment_fails(tmp_path, monkeypatch):
     assert len(requests) == 2
     assert logs[-1]["tb_event"] == "iris_comment_error"
     assert logs[-1]["iris_alert_id"] == 801
+
+
+def test_recovery_before_problem_is_saved_and_consumed_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "IRIS", "https://iris.example.test")
+    monkeypatch.setattr(tb, "IRIS_KEY", "secret")
+    resolved = zabbix_event()
+    resolved["fields"]["zabbix_event_status"] = "RESOLVED"
+    assert tb.close_iris(resolved) == (False, "pending")
+
+    con = tb.state_db()
+    assert con.execute("SELECT dedup_key FROM iris_recovery_pending").fetchone() == ("zabbix:123456",)
+    con.close()
+    problem = zabbix_event()
+    problem["fields"]["zabbix_event_status"] = "PROBLEM"
+    assert tb.consume_pending_zabbix_recovery(problem) is True
+    assert tb.consume_pending_zabbix_recovery(problem) is False
+
+
+def test_late_problem_is_suppressed_before_glpi_and_iris(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(tb, "IRIS", "https://iris.example.test")
+    monkeypatch.setattr(tb, "IRIS_KEY", "secret")
+    logs = []
+    monkeypatch.setattr(tb, "send_gelf", lambda short, **fields: logs.append(fields))
+    monkeypatch.setattr(tb, "_handle_event",
+                        lambda event: pytest.fail("GLPI must not receive a recovered problem"))
+    monkeypatch.setattr(tb, "send_iris",
+                        lambda event: pytest.fail("IRIS must not receive a recovered problem"))
+    resolved = zabbix_event()
+    resolved["fields"]["zabbix_event_status"] = "RESOLVED"
+    tb.handle_event(resolved)
+    assert logs[-1]["tb_event"] == "iris_recovery_pending"
+
+    problem = zabbix_event()
+    problem["priority"] = 3
+    problem["fields"]["zabbix_event_status"] = "PROBLEM"
+    assert tb.handle_event(problem) is None
+    assert logs[-1]["tb_event"] == "iris_race_suppressed"
+    assert logs[-1]["zabbix_event_id"] == "123456"
+
+
+def test_expired_pending_recovery_does_not_suppress_problem(tmp_path, monkeypatch):
+    monkeypatch.setattr(tb, "STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setenv("TB_RECOVERY_PENDING_TTL", "10")
+    con = tb.state_db()
+    con.execute("INSERT INTO iris_recovery_pending VALUES('zabbix:123456',?)",
+                (tb.time.time() - 11,))
+    con.commit()
+    con.close()
+    problem = zabbix_event()
+    problem["fields"]["zabbix_event_status"] = "PROBLEM"
+    assert tb.consume_pending_zabbix_recovery(problem) is False
+    con = tb.state_db()
+    assert con.execute("SELECT count(*) FROM iris_recovery_pending").fetchone()[0] == 0
+    con.close()
