@@ -492,7 +492,13 @@ python3 tools/sync_zabbix_graylog_fields.py --apply  # backup, update, verify
 - `zabbix_suite.py` — сервисная модель, SLA, карта, окна обслуживания и отчёты
   по шуму/флаппингу/MTTA/MTTR;
 - `soc_watchdog.py` — проверка Zabbix, Graylog, IRIS и TicketBridge с trapper-
-  метриками и authenticated GELF fallback при недоступности Zabbix;
+  метриками и authenticated GELF fallback при недоступности Zabbix. На каждом
+  запуске также измеряет inotify-наблюдения текущего пользователя: WARNING при
+  70 % лимита, CRITICAL при 85 %, RESOLVED после снижения до 60 % и ниже.
+  Пороги меняются через `INOTIFY_WARN_PERCENT`, `INOTIFY_CRIT_PERCENT` и
+  `INOTIFY_RECOVER_PERCENT`. Уведомления отправляются только при смене состояния;
+  событие содержит общее потребление, лимит и крупнейшего потребителя. Один
+  `zabbix_event_id` связывает проблему, эскалацию и автоматическое закрытие в IRIS;
 - `soc-watchdog.service`, `soc-watchdog.timer`, `zabbix-analytics.service`,
   `zabbix-analytics.timer` — пользовательские systemd-юниты;
 - `test_zabbix_suite_e2e.py` — двухфазный сквозной тест PROBLEM/RESOLVED с
